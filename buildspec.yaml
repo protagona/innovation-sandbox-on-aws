@@ -16,6 +16,8 @@ phases:
       - npm ci
   pre_build:
     commands:
+      - echo "Setting npm script shell to bash..."
+      - npm config set script-shell "/bin/bash"
       - echo "Building solution..."
       - npm run build
       - echo "Synthesizing CDK stacks..."
@@ -26,7 +28,7 @@ phases:
         # Environment variables are already set by CodeBuild project, so .env is not needed
         touch .env
         echo "Testing .env file..."
-        source .env
+        npm run env:test
   build:
     commands:
       # Deploy Account Pool Stack (Root Account)
