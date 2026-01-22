@@ -18,10 +18,6 @@ phases:
     commands:
       - echo "Setting npm script shell to bash..."
       - npm config set script-shell "/bin/bash"
-      - echo "Building solution..."
-      - npm run build
-      - echo "Synthesizing CDK stacks..."
-      - npm run --workspace @amzn/innovation-sandbox-infrastructure cdk synth
       - |
         echo "Creating empty .env file..."
         # Create empty .env file so 'source .env' in npm scripts doesn't fail
@@ -29,6 +25,10 @@ phases:
         touch .env
         echo "Testing .env file..."
         npm run env:test
+      - echo "Building solution..."
+      - npm run build
+      - echo "Synthesizing CDK stacks..."
+      - npm run --workspace @amzn/innovation-sandbox-infrastructure cdk synth
   build:
     commands:
       # Deploy Account Pool Stack (Root Account)
