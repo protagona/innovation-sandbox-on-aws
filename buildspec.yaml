@@ -39,8 +39,7 @@ phases:
         echo "Assuming CDK deployment role: ${ORG_MGT_ACCOUNT_DEPLOY_ROLE_ARN}"
         ORG_MGT_ACCOUNT_CREDS=$(aws sts assume-role \
           --role-arn "${ORG_MGT_ACCOUNT_DEPLOY_ROLE_ARN}" \
-          --role-session-name "CodeBuild-Deploy-AccountPool-$(date +%s)" \
-          --external-id "CodeBuild-Deploy-AccountPool-$(date +%s)")
+          --role-session-name "CodeBuild-Deploy-AccountPool-$(date +%s)")
         export AWS_ACCESS_KEY_ID=$(echo $ORG_MGT_ACCOUNT_CREDS | jq -r '.Credentials.AccessKeyId')
         export AWS_SECRET_ACCESS_KEY=$(echo $ORG_MGT_ACCOUNT_CREDS | jq -r '.Credentials.SecretAccessKey')
         export AWS_SESSION_TOKEN=$(echo $ORG_MGT_ACCOUNT_CREDS | jq -r '.Credentials.SessionToken')
@@ -56,8 +55,7 @@ phases:
         echo "Assuming CDK deployment role: ${IDC_DEPLOY_ROLE_ARN}"
         IDC_CREDS=$(aws sts assume-role \
           --role-arn "${IDC_DEPLOY_ROLE_ARN}" \
-          --role-session-name "CodeBuild-Deploy-IDC-$(date +%s)" \
-          --external-id "CodeBuild-Deploy-IDC-$(date +%s)")
+          --role-session-name "CodeBuild-Deploy-IDC-$(date +%s)")
         export AWS_ACCESS_KEY_ID=$(echo $IDC_CREDS | jq -r '.Credentials.AccessKeyId')
         export AWS_SECRET_ACCESS_KEY=$(echo $IDC_CREDS | jq -r '.Credentials.SecretAccessKey')
         export AWS_SESSION_TOKEN=$(echo $IDC_CREDS | jq -r '.Credentials.SessionToken')
@@ -73,8 +71,7 @@ phases:
         echo "Assuming CDK deployment role: ${HUB_DEPLOY_ROLE_ARN}"
         HUB_ACCOUNT_CREDS=$(aws sts assume-role \
           --role-arn "${HUB_DEPLOY_ROLE_ARN}" \
-          --role-session-name "CodeBuild-Deploy-Data-$(date +%s)" \
-          --external-id "CodeBuild-Deploy-Data-$(date +%s)")
+          --role-session-name "CodeBuild-Deploy-Data-$(date +%s)")
         export AWS_ACCESS_KEY_ID=$(echo $HUB_ACCOUNT_CREDS | jq -r '.Credentials.AccessKeyId')
         export AWS_SECRET_ACCESS_KEY=$(echo $HUB_ACCOUNT_CREDS | jq -r '.Credentials.SecretAccessKey')
         export AWS_SESSION_TOKEN=$(echo $HUB_ACCOUNT_CREDS | jq -r '.Credentials.SessionToken')
