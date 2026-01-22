@@ -26,20 +26,20 @@ phases:
         touch .env
   build:
     commands:
+      - alias source='.'
       # Deploy Account Pool Stack (Root Account)
       - |
         echo "=========================================="
         echo "Deploying Account Pool Stack"
         echo "=========================================="
-        # ORG_MGT_ACCOUNT_ID and AWS_REGION should be set by CodeBuild project
-        ACCOUNT_POOL_DEPLOY_ROLE_ARN="arn:aws:iam::${ORG_MGT_ACCOUNT_ID}:role/cdk-${CDK_BOOTSTRAP_QUALIFIER}-deploy-role-${ORG_MGT_ACCOUNT_ID}-${AWS_REGION}"
-        echo "Assuming CDK deployment role: ${ACCOUNT_POOL_DEPLOY_ROLE_ARN}"
-        ACCOUNT_POOL_CREDS=$(aws sts assume-role \
-          --role-arn "${ACCOUNT_POOL_DEPLOY_ROLE_ARN}" \
+        # ORG_MGT_ACCOUNT_DEPLOY_ROLE should be set by CodeBuild project
+        echo "Assuming CDK deployment role: ${ORG_MGT_ACCOUNT_DEPLOY_ROLE}"
+        ORG_MGT_ACCOUNT_CREDS=$(aws sts assume-role \
+          --role-arn "${ORG_MGT_ACCOUNT_DEPLOY_ROLE}" \
           --role-session-name "CodeBuild-Deploy-AccountPool-$(date +%s)")
-        export AWS_ACCESS_KEY_ID=$(echo $ACCOUNT_POOL_CREDS | jq -r '.Credentials.AccessKeyId')
-        export AWS_SECRET_ACCESS_KEY=$(echo $ACCOUNT_POOL_CREDS | jq -r '.Credentials.SecretAccessKey')
-        export AWS_SESSION_TOKEN=$(echo $ACCOUNT_POOL_CREDS | jq -r '.Credentials.SessionToken')
+        export AWS_ACCESS_KEY_ID=$(echo $ORG_MGT_ACCOUNT_CREDS | jq -r '.Credentials.AccessKeyId')
+        export AWS_SECRET_ACCESS_KEY=$(echo $ORG_MGT_ACCOUNT_CREDS | jq -r '.Credentials.SecretAccessKey')
+        export AWS_SESSION_TOKEN=$(echo $ORG_MGT_ACCOUNT_CREDS | jq -r '.Credentials.SessionToken')
         export AWS_DEFAULT_REGION="${AWS_REGION}"
         bash -c "npm run deploy:account-pool"
       # Deploy IDC Stack (Root Account)
@@ -47,11 +47,10 @@ phases:
         echo "=========================================="
         echo "Deploying IDC Stack"
         echo "=========================================="
-        # IDC_ACCOUNT_ID and AWS_REGION should be set by CodeBuild project
-        IDC_DEPLOY_ROLE_ARN="arn:aws:iam::${IDC_ACCOUNT_ID}:role/cdk-${CDK_BOOTSTRAP_QUALIFIER}-deploy-role-${IDC_ACCOUNT_ID}-${AWS_REGION}"
-        echo "Assuming CDK deployment role: ${IDC_DEPLOY_ROLE_ARN}"
+        # IDC_ACCOUNT_DEPLOY_ROLE should be set by CodeBuild project
+        echo "Assuming CDK deployment role: ${IDC_ACCOUNT_DEPLOY_ROLE}"
         IDC_CREDS=$(aws sts assume-role \
-          --role-arn "${IDC_DEPLOY_ROLE_ARN}" \
+          --role-arn "${IDC_ACCOUNT_DEPLOY_ROLE}" \
           --role-session-name "CodeBuild-Deploy-IDC-$(date +%s)")
         export AWS_ACCESS_KEY_ID=$(echo $IDC_CREDS | jq -r '.Credentials.AccessKeyId')
         export AWS_SECRET_ACCESS_KEY=$(echo $IDC_CREDS | jq -r '.Credentials.SecretAccessKey')
@@ -63,15 +62,14 @@ phases:
         echo "=========================================="
         echo "Deploying Data Stack"
         echo "=========================================="
-        # HUB_ACCOUNT_ID and AWS_REGION should be set by CodeBuild project
-        HUB_DEPLOY_ROLE_ARN="arn:aws:iam::${HUB_ACCOUNT_ID}:role/cdk-${CDK_BOOTSTRAP_QUALIFIER}-deploy-role-${HUB_ACCOUNT_ID}-${AWS_REGION}"
-        echo "Assuming CDK deployment role: ${HUB_DEPLOY_ROLE_ARN}"
-        HUB_CREDS=$(aws sts assume-role \
-          --role-arn "${HUB_DEPLOY_ROLE_ARN}" \
+        # HUB_ACCOUNT_DEPLOY_ROLE should be set by CodeBuild project
+        echo "Assuming CDK deployment role: ${HUB_ACCOUNT_DEPLOY_ROLE}"
+        HUB_ACCOUNT_CREDS=$(aws sts assume-role \
+          --role-arn "${HUB_ACCOUNT_DEPLOY_ROLE}" \
           --role-session-name "CodeBuild-Deploy-Data-$(date +%s)")
-        export AWS_ACCESS_KEY_ID=$(echo $HUB_CREDS | jq -r '.Credentials.AccessKeyId')
-        export AWS_SECRET_ACCESS_KEY=$(echo $HUB_CREDS | jq -r '.Credentials.SecretAccessKey')
-        export AWS_SESSION_TOKEN=$(echo $HUB_CREDS | jq -r '.Credentials.SessionToken')
+        export AWS_ACCESS_KEY_ID=$(echo $HUB_ACCOUNT_CREDS | jq -r '.Credentials.AccessKeyId')
+        export AWS_SECRET_ACCESS_KEY=$(echo $HUB_ACCOUNT_CREDS | jq -r '.Credentials.SecretAccessKey')
+        export AWS_SESSION_TOKEN=$(echo $HUB_ACCOUNT_CREDS | jq -r '.Credentials.SessionToken')
         export AWS_DEFAULT_REGION="${AWS_REGION}"
         bash -c "npm run deploy:data"
       # Deploy Compute Stack (Main Account)
@@ -79,8 +77,8 @@ phases:
         echo "=========================================="
         echo "Deploying Compute Stack"
         echo "=========================================="
-        # HUB_ACCOUNT_ID and AWS_REGION should be set by CodeBuild project
-        echo "Continuing use of existing HUB_ACCOUNT_ID (${HUB_ACCOUNT_ID}) credentials for Compute Stack deployment..."
+        # HUB_ACCOUNT_DEPLOY_ROLE should be set by CodeBuild project
+        echo "Continuing use of existing HUB_ACCOUNT_DEPLOY_ROLE (${HUB_ACCOUNT_DEPLOY_ROLE}) credentials for Compute Stack deployment..."
         bash -c "npm run deploy:compute"
       - echo "=========================================="
       - echo "Deployment complete!"
