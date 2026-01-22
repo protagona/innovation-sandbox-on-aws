@@ -41,7 +41,7 @@ phases:
         export AWS_SECRET_ACCESS_KEY=$(echo $ORG_MGT_ACCOUNT_CREDS | jq -r '.Credentials.SecretAccessKey')
         export AWS_SESSION_TOKEN=$(echo $ORG_MGT_ACCOUNT_CREDS | jq -r '.Credentials.SessionToken')
         export AWS_DEFAULT_REGION="${AWS_REGION}"
-        bash -c "npm run deploy:account-pool"
+        bash -c "alias source='.' && npm run deploy:account-pool"
       # Deploy IDC Stack (Root Account)
       - |
         echo "=========================================="
@@ -56,7 +56,7 @@ phases:
         export AWS_SECRET_ACCESS_KEY=$(echo $IDC_CREDS | jq -r '.Credentials.SecretAccessKey')
         export AWS_SESSION_TOKEN=$(echo $IDC_CREDS | jq -r '.Credentials.SessionToken')
         export AWS_DEFAULT_REGION="${AWS_REGION}"
-        bash -c "npm run deploy:idc"
+        bash -c "alias source='.' && npm run deploy:idc"
       # Deploy Data Stack (Main Account)
       - |
         echo "=========================================="
@@ -71,7 +71,7 @@ phases:
         export AWS_SECRET_ACCESS_KEY=$(echo $HUB_ACCOUNT_CREDS | jq -r '.Credentials.SecretAccessKey')
         export AWS_SESSION_TOKEN=$(echo $HUB_ACCOUNT_CREDS | jq -r '.Credentials.SessionToken')
         export AWS_DEFAULT_REGION="${AWS_REGION}"
-        bash -c "npm run deploy:data"
+        bash -c "alias source='.' && npm run deploy:data"
       # Deploy Compute Stack (Main Account)
       - |
         echo "=========================================="
@@ -79,7 +79,7 @@ phases:
         echo "=========================================="
         # HUB_ACCOUNT_DEPLOY_ROLE should be set by CodeBuild project
         echo "Continuing use of existing HUB_ACCOUNT_DEPLOY_ROLE (${HUB_ACCOUNT_DEPLOY_ROLE}) credentials for Compute Stack deployment..."
-        bash -c "npm run deploy:compute"
+        bash -c "alias source='.' && npm run deploy:compute"
       - echo "=========================================="
       - echo "Deployment complete!"
       - echo "=========================================="
