@@ -1,5 +1,6 @@
 version: 0.2
 env:
+  shell: bash
   variables:
     # CDK Bootstrap role qualifier
     # Default: 'hnb659fds' (standard CDK bootstrap qualifier)
@@ -26,7 +27,6 @@ phases:
         touch .env
   build:
     commands:
-      - alias source='.'
       # Deploy Account Pool Stack (Root Account)
       - |
         echo "=========================================="
@@ -36,12 +36,13 @@ phases:
         echo "Assuming CDK deployment role: ${ORG_MGT_ACCOUNT_DEPLOY_ROLE}"
         ORG_MGT_ACCOUNT_CREDS=$(aws sts assume-role \
           --role-arn "${ORG_MGT_ACCOUNT_DEPLOY_ROLE}" \
-          --role-session-name "CodeBuild-Deploy-AccountPool-$(date +%s)")
+          --role-session-name "CodeBuild-Deploy-AccountPool-$(date +%s)" \
+          --external-id "CodeBuild-Deploy-AccountPool-$(date +%s)")
         export AWS_ACCESS_KEY_ID=$(echo $ORG_MGT_ACCOUNT_CREDS | jq -r '.Credentials.AccessKeyId')
         export AWS_SECRET_ACCESS_KEY=$(echo $ORG_MGT_ACCOUNT_CREDS | jq -r '.Credentials.SecretAccessKey')
         export AWS_SESSION_TOKEN=$(echo $ORG_MGT_ACCOUNT_CREDS | jq -r '.Credentials.SessionToken')
         export AWS_DEFAULT_REGION="${AWS_REGION}"
-        bash -c "alias source='.' && npm run deploy:account-pool"
+        npm run deploy:account-pool
       # Deploy IDC Stack (Root Account)
       - |
         echo "=========================================="
@@ -51,12 +52,13 @@ phases:
         echo "Assuming CDK deployment role: ${IDC_ACCOUNT_DEPLOY_ROLE}"
         IDC_CREDS=$(aws sts assume-role \
           --role-arn "${IDC_ACCOUNT_DEPLOY_ROLE}" \
-          --role-session-name "CodeBuild-Deploy-IDC-$(date +%s)")
+          --role-session-name "CodeBuild-Deploy-IDC-$(date +%s)" \
+          --external-id "CodeBuild-Deploy-IDC-$(date +%s)")
         export AWS_ACCESS_KEY_ID=$(echo $IDC_CREDS | jq -r '.Credentials.AccessKeyId')
         export AWS_SECRET_ACCESS_KEY=$(echo $IDC_CREDS | jq -r '.Credentials.SecretAccessKey')
         export AWS_SESSION_TOKEN=$(echo $IDC_CREDS | jq -r '.Credentials.SessionToken')
         export AWS_DEFAULT_REGION="${AWS_REGION}"
-        bash -c "alias source='.' && npm run deploy:idc"
+        npm run deploy:idc
       # Deploy Data Stack (Main Account)
       - |
         echo "=========================================="
@@ -66,12 +68,13 @@ phases:
         echo "Assuming CDK deployment role: ${HUB_ACCOUNT_DEPLOY_ROLE}"
         HUB_ACCOUNT_CREDS=$(aws sts assume-role \
           --role-arn "${HUB_ACCOUNT_DEPLOY_ROLE}" \
-          --role-session-name "CodeBuild-Deploy-Data-$(date +%s)")
+          --role-session-name "CodeBuild-Deploy-Data-$(date +%s)" \
+          --external-id "CodeBuild-Deploy-Data-$(date +%s)")
         export AWS_ACCESS_KEY_ID=$(echo $HUB_ACCOUNT_CREDS | jq -r '.Credentials.AccessKeyId')
         export AWS_SECRET_ACCESS_KEY=$(echo $HUB_ACCOUNT_CREDS | jq -r '.Credentials.SecretAccessKey')
         export AWS_SESSION_TOKEN=$(echo $HUB_ACCOUNT_CREDS | jq -r '.Credentials.SessionToken')
         export AWS_DEFAULT_REGION="${AWS_REGION}"
-        bash -c "alias source='.' && npm run deploy:data"
+        npm run deploy:data
       # Deploy Compute Stack (Main Account)
       - |
         echo "=========================================="
@@ -79,7 +82,7 @@ phases:
         echo "=========================================="
         # HUB_ACCOUNT_DEPLOY_ROLE should be set by CodeBuild project
         echo "Continuing use of existing HUB_ACCOUNT_DEPLOY_ROLE (${HUB_ACCOUNT_DEPLOY_ROLE}) credentials for Compute Stack deployment..."
-        bash -c "alias source='.' && npm run deploy:compute"
+        npm run deploy:compute
       - echo "=========================================="
       - echo "Deployment complete!"
       - echo "=========================================="
