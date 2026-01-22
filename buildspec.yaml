@@ -1,0 +1,102 @@
+version: 0.2
+env:
+  variables:
+    # CDK Bootstrap role qualifier
+    # Default: 'hnb659fds' (standard CDK bootstrap qualifier)
+    # Override: Set CDK_BOOTSTRAP_QUALIFIER in CodeBuild project environment variables
+    #           to match the qualifier used when bootstrapping CDK (e.g., 'custom-qualifier')
+    CDK_BOOTSTRAP_QUALIFIER: "hnb659fds"
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+    commands:
+      - echo "Installing dependencies..."
+      - npm ci
+  pre_build:
+    commands:
+      - echo "Building solution..."
+      - npm run build
+      - echo "Synthesizing CDK stacks..."
+      - npm run --workspace @amzn/innovation-sandbox-infrastructure cdk synth
+      - |
+        echo "Creating empty .env file..."
+        # Create empty .env file so 'source .env' in npm scripts doesn't fail
+        # Environment variables are already set by CodeBuild project, so .env is not needed
+        touch .env
+  build:
+    commands:
+      # Deploy Account Pool Stack (Root Account)
+      - |
+        echo "=========================================="
+        echo "Deploying Account Pool Stack"
+        echo "=========================================="
+        # ROOT_ACCOUNT_ID and AWS_REGION should be set by CodeBuild project
+        ROOT_DEPLOY_ROLE_ARN="arn:aws:iam::${ROOT_ACCOUNT_ID}:role/cdk-${CDK_BOOTSTRAP_QUALIFIER}-deploy-role-${ROOT_ACCOUNT_ID}-${AWS_REGION}"
+        echo "Assuming CDK deployment role: ${ROOT_DEPLOY_ROLE_ARN}"
+        ROOT_CREDS=$(aws sts assume-role \
+          --role-arn "${ROOT_DEPLOY_ROLE_ARN}" \
+          --role-session-name "CodeBuild-Deploy-AccountPool-$(date +%s)")
+        export AWS_ACCESS_KEY_ID=$(echo $ROOT_CREDS | jq -r '.Credentials.AccessKeyId')
+        export AWS_SECRET_ACCESS_KEY=$(echo $ROOT_CREDS | jq -r '.Credentials.SecretAccessKey')
+        export AWS_SESSION_TOKEN=$(echo $ROOT_CREDS | jq -r '.Credentials.SessionToken')
+        export AWS_DEFAULT_REGION="${AWS_REGION}"
+        npm run deploy:account-pool
+      # Deploy IDC Stack (Root Account)
+      - |
+        echo "=========================================="
+        echo "Deploying IDC Stack"
+        echo "=========================================="
+        # ROOT_ACCOUNT_ID and AWS_REGION should be set by CodeBuild project
+        ROOT_DEPLOY_ROLE_ARN="arn:aws:iam::${ROOT_ACCOUNT_ID}:role/cdk-${CDK_BOOTSTRAP_QUALIFIER}-deploy-role-${ROOT_ACCOUNT_ID}-${AWS_REGION}"
+        echo "Assuming CDK deployment role: ${ROOT_DEPLOY_ROLE_ARN}"
+        ROOT_CREDS=$(aws sts assume-role \
+          --role-arn "${ROOT_DEPLOY_ROLE_ARN}" \
+          --role-session-name "CodeBuild-Deploy-IDC-$(date +%s)")
+        export AWS_ACCESS_KEY_ID=$(echo $ROOT_CREDS | jq -r '.Credentials.AccessKeyId')
+        export AWS_SECRET_ACCESS_KEY=$(echo $ROOT_CREDS | jq -r '.Credentials.SecretAccessKey')
+        export AWS_SESSION_TOKEN=$(echo $ROOT_CREDS | jq -r '.Credentials.SessionToken')
+        export AWS_DEFAULT_REGION="${AWS_REGION}"
+        npm run deploy:idc
+      # Deploy Data Stack (Main Account)
+      - |
+        echo "=========================================="
+        echo "Deploying Data Stack"
+        echo "=========================================="
+        # MAIN_ACCOUNT_ID (or SANDBOX_MAIN_ACCOUNT_ID) and AWS_REGION should be set by CodeBuild project
+        # Using MAIN_ACCOUNT_ID to match the deploy script, but this should match your CodeBuild env var name
+        MAIN_ACCOUNT_ID=${MAIN_ACCOUNT_ID:-${SANDBOX_MAIN_ACCOUNT_ID}}
+        MAIN_DEPLOY_ROLE_ARN="arn:aws:iam::${MAIN_ACCOUNT_ID}:role/cdk-${CDK_BOOTSTRAP_QUALIFIER}-deploy-role-${MAIN_ACCOUNT_ID}-${AWS_REGION}"
+        echo "Assuming CDK deployment role: ${MAIN_DEPLOY_ROLE_ARN}"
+        MAIN_CREDS=$(aws sts assume-role \
+          --role-arn "${MAIN_DEPLOY_ROLE_ARN}" \
+          --role-session-name "CodeBuild-Deploy-Data-$(date +%s)")
+        export AWS_ACCESS_KEY_ID=$(echo $MAIN_CREDS | jq -r '.Credentials.AccessKeyId')
+        export AWS_SECRET_ACCESS_KEY=$(echo $MAIN_CREDS | jq -r '.Credentials.SecretAccessKey')
+        export AWS_SESSION_TOKEN=$(echo $MAIN_CREDS | jq -r '.Credentials.SessionToken')
+        export AWS_DEFAULT_REGION="${AWS_REGION}"
+        npm run deploy:data
+      # Deploy Compute Stack (Main Account)
+      - |
+        echo "=========================================="
+        echo "Deploying Compute Stack"
+        echo "=========================================="
+        # MAIN_ACCOUNT_ID (or SANDBOX_MAIN_ACCOUNT_ID) and AWS_REGION should be set by CodeBuild project
+        MAIN_ACCOUNT_ID=${MAIN_ACCOUNT_ID:-${SANDBOX_MAIN_ACCOUNT_ID}}
+        MAIN_DEPLOY_ROLE_ARN="arn:aws:iam::${MAIN_ACCOUNT_ID}:role/cdk-${CDK_BOOTSTRAP_QUALIFIER}-deploy-role-${MAIN_ACCOUNT_ID}-${AWS_REGION}"
+        echo "Assuming CDK deployment role: ${MAIN_DEPLOY_ROLE_ARN}"
+        MAIN_CREDS=$(aws sts assume-role \
+          --role-arn "${MAIN_DEPLOY_ROLE_ARN}" \
+          --role-session-name "CodeBuild-Deploy-Compute-$(date +%s)")
+        export AWS_ACCESS_KEY_ID=$(echo $MAIN_CREDS | jq -r '.Credentials.AccessKeyId')
+        export AWS_SECRET_ACCESS_KEY=$(echo $MAIN_CREDS | jq -r '.Credentials.SecretAccessKey')
+        export AWS_SESSION_TOKEN=$(echo $MAIN_CREDS | jq -r '.Credentials.SessionToken')
+        export AWS_DEFAULT_REGION="${AWS_REGION}"
+        npm run deploy:compute
+      - echo "=========================================="
+      - echo "Deployment complete!"
+      - echo "=========================================="
+artifacts:
+  files:
+    - '**/*'
+  name: deployment-artifacts-$(date +%Y-%m-%d)
