@@ -35,7 +35,7 @@ phases:
         echo "Assuming CDK deployment role for Account Pool Stack"
         echo "=========================================="
         # ORG_MGT_ACCOUNT_ID and AWS_REGION should be set by CodeBuild project
-        ORG_MGT_ACCOUNT_DEPLOY_ROLE_ARN="arn:aws:iam::${ORG_MGT_ACCOUNT_ID}:role/cdk-${CDK_BOOTSTRAP_QUALIFIER}-deploy-role-${ORG_MGT_ACCOUNT_ID}-${AWS_REGION}"
+        ORG_MGT_ACCOUNT_DEPLOY_ROLE_ARN="arn:aws:iam::${ORG_MGT_ACCOUNT_ID}:role/innovation-sandbox-pipeline-deployment-role"
         echo "Assuming CDK deployment role: ${ORG_MGT_ACCOUNT_DEPLOY_ROLE_ARN}"
         ORG_MGT_ACCOUNT_CREDS=$(aws sts assume-role \
           --role-arn "${ORG_MGT_ACCOUNT_DEPLOY_ROLE_ARN}" \
@@ -56,7 +56,7 @@ phases:
         echo "Assuming CDK deployment role for IDC Stack"
         echo "=========================================="
         # IDC_ACCOUNT_ID and AWS_REGION should be set by CodeBuild project
-        IDC_DEPLOY_ROLE_ARN="arn:aws:iam::${IDC_ACCOUNT_ID}:role/cdk-${CDK_BOOTSTRAP_QUALIFIER}-deploy-role-${IDC_ACCOUNT_ID}-${AWS_REGION}"
+        IDC_DEPLOY_ROLE_ARN="arn:aws:iam::${IDC_ACCOUNT_ID}:role/innovation-sandbox-pipeline-deployment-role"
         echo "Assuming CDK deployment role: ${IDC_DEPLOY_ROLE_ARN}"
         IDC_CREDS=$(aws sts assume-role \
           --role-arn "${IDC_DEPLOY_ROLE_ARN}" \
@@ -77,7 +77,7 @@ phases:
         echo "Assuming CDK deployment role for Data and Compute Stacks"
         echo "=========================================="
         # HUB_ACCOUNT_ID and AWS_REGION should be set by CodeBuild project
-        HUB_DEPLOY_ROLE_ARN="arn:aws:iam::${HUB_ACCOUNT_ID}:role/cdk-${CDK_BOOTSTRAP_QUALIFIER}-deploy-role-${HUB_ACCOUNT_ID}-${AWS_REGION}"
+        HUB_DEPLOY_ROLE_ARN="arn:aws:iam::${HUB_ACCOUNT_ID}:role/innovation-sandbox-pipeline-deployment-role"
         echo "Assuming CDK deployment role: ${HUB_DEPLOY_ROLE_ARN}"
         HUB_ACCOUNT_CREDS=$(aws sts assume-role \
           --role-arn "${HUB_DEPLOY_ROLE_ARN}" \
