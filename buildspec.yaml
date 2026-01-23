@@ -50,6 +50,16 @@ phases:
         echo "Deploying Account Pool Stack"
         echo "=========================================="
         npm run deploy:account-pool
+      # Clear AWS credentials
+      - |
+        echo "=========================================="
+        echo "Clearing AWS credentials"
+        echo "=========================================="
+        unset AWS_ACCESS_KEY_ID
+        unset AWS_SECRET_ACCESS_KEY
+        unset AWS_SESSION_TOKEN
+        unset AWS_DEFAULT_REGION
+        aws sts get-caller-identity
       # Deploy IDC Stack (Root Account)
       - |
         echo "=========================================="
@@ -71,6 +81,16 @@ phases:
         echo "Deploying IDC Stack"
         echo "=========================================="
         npm run deploy:idc
+      # Clear AWS credentials
+      - |
+        echo "=========================================="
+        echo "Clearing AWS credentials"
+        echo "=========================================="
+        unset AWS_ACCESS_KEY_ID
+        unset AWS_SECRET_ACCESS_KEY
+        unset AWS_SESSION_TOKEN
+        unset AWS_DEFAULT_REGION
+        aws sts get-caller-identity
       # Deploy Data Stack (Main Account)
       - |
         echo "=========================================="
