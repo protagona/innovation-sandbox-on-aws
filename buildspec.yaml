@@ -1,13 +1,6 @@
 version: 0.2
 env:
   shell: bash
-  variables:
-    # CDK Bootstrap role qualifier
-    # Default: 'hnb659fds' (standard CDK bootstrap qualifier)
-    # Override: Set CDK_BOOTSTRAP_QUALIFIER in CodeBuild project environment variables
-    #           to match the qualifier used when bootstrapping CDK (e.g., 'custom-qualifier')
-    CDK_BOOTSTRAP_QUALIFIER: "hnb659fds"
-    ACCEPT_SOLUTION_TERMS_OF_USE: "true"
 phases:
   install:
     runtime-versions:
