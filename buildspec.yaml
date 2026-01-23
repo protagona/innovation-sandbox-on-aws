@@ -10,7 +10,7 @@ env:
 phases:
   install:
     runtime-versions:
-      nodejs: 20
+      nodejs: 24
     commands:
       - echo "Installing dependencies..."
       - npm ci
@@ -27,14 +27,12 @@ phases:
         npm run env:test
       - echo "Building solution..."
       - npm run build
-      - echo "Synthesizing CDK stacks..."
-      - npm run --workspace @amzn/innovation-sandbox-infrastructure cdk synth
   build:
     commands:
       # Deploy Account Pool Stack (Root Account)
       - |
         echo "=========================================="
-        echo "Deploying Account Pool Stack"
+        echo "Assuming CDK deployment role for Account Pool Stack"
         echo "=========================================="
         # ORG_MGT_ACCOUNT_ID and AWS_REGION should be set by CodeBuild project
         ORG_MGT_ACCOUNT_DEPLOY_ROLE_ARN="arn:aws:iam::${ORG_MGT_ACCOUNT_ID}:role/cdk-${CDK_BOOTSTRAP_QUALIFIER}-deploy-role-${ORG_MGT_ACCOUNT_ID}-${AWS_REGION}"
@@ -46,11 +44,16 @@ phases:
         export AWS_SECRET_ACCESS_KEY=$(echo $ORG_MGT_ACCOUNT_CREDS | jq -r '.Credentials.SecretAccessKey')
         export AWS_SESSION_TOKEN=$(echo $ORG_MGT_ACCOUNT_CREDS | jq -r '.Credentials.SessionToken')
         export AWS_DEFAULT_REGION="${AWS_REGION}"
+        aws sts get-caller-identity
+      - |
+        echo "=========================================="
+        echo "Deploying Account Pool Stack"
+        echo "=========================================="
         npm run deploy:account-pool
       # Deploy IDC Stack (Root Account)
       - |
         echo "=========================================="
-        echo "Deploying IDC Stack"
+        echo "Assuming CDK deployment role for IDC Stack"
         echo "=========================================="
         # IDC_ACCOUNT_ID and AWS_REGION should be set by CodeBuild project
         IDC_DEPLOY_ROLE_ARN="arn:aws:iam::${IDC_ACCOUNT_ID}:role/cdk-${CDK_BOOTSTRAP_QUALIFIER}-deploy-role-${IDC_ACCOUNT_ID}-${AWS_REGION}"
@@ -62,11 +65,16 @@ phases:
         export AWS_SECRET_ACCESS_KEY=$(echo $IDC_CREDS | jq -r '.Credentials.SecretAccessKey')
         export AWS_SESSION_TOKEN=$(echo $IDC_CREDS | jq -r '.Credentials.SessionToken')
         export AWS_DEFAULT_REGION="${AWS_REGION}"
+        aws sts get-caller-identity
+      - |
+        echo "=========================================="
+        echo "Deploying IDC Stack"
+        echo "=========================================="
         npm run deploy:idc
       # Deploy Data Stack (Main Account)
       - |
         echo "=========================================="
-        echo "Deploying Data Stack"
+        echo "Assuming CDK deployment role for Data and Compute Stacks"
         echo "=========================================="
         # HUB_ACCOUNT_ID and AWS_REGION should be set by CodeBuild project
         HUB_DEPLOY_ROLE_ARN="arn:aws:iam::${HUB_ACCOUNT_ID}:role/cdk-${CDK_BOOTSTRAP_QUALIFIER}-deploy-role-${HUB_ACCOUNT_ID}-${AWS_REGION}"
@@ -78,6 +86,11 @@ phases:
         export AWS_SECRET_ACCESS_KEY=$(echo $HUB_ACCOUNT_CREDS | jq -r '.Credentials.SecretAccessKey')
         export AWS_SESSION_TOKEN=$(echo $HUB_ACCOUNT_CREDS | jq -r '.Credentials.SessionToken')
         export AWS_DEFAULT_REGION="${AWS_REGION}"
+        aws sts get-caller-identity
+      - |
+        echo "=========================================="
+        echo "Deploying Data Stack"
+        echo "=========================================="
         npm run deploy:data
       # Deploy Compute Stack (Main Account)
       - |
