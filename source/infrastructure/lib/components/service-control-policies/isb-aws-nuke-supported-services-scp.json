@@ -137,7 +137,8 @@
         "waf:*",
         "wafv2:*",
         "workspaces:*",
-        "xray:*"
+        "xray:*",
+        "sts:*"
       ],
       "Resource": ["*"],
       "Condition": {
