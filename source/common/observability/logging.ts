@@ -1,12 +1,13 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
-import { LeaseTemplate } from "@amzn/innovation-sandbox-commons/data/lease-template/lease-template.js";
-import {
-  isMonitoredLease,
-  Lease,
-} from "@amzn/innovation-sandbox-commons/data/lease/lease.js";
-import { SandboxAccount } from "@amzn/innovation-sandbox-commons/data/sandbox-account/sandbox-account.js";
+import { PersistedBlueprintWithStackSets } from "@amzn/innovation-sandbox-commons/data/blueprint/blueprint.js";
+import { PersistedLease } from "@amzn/innovation-sandbox-commons/data/lease/lease.js";
+import { PersistedSandboxAccount } from "@amzn/innovation-sandbox-commons/data/sandbox-account/sandbox-account.js";
+import { SubscribableLog } from "@amzn/innovation-sandbox-commons/observability/log-types.js";
+import { IsbAccountTagSuffix } from "@amzn/innovation-sandbox-commons/utils/isb-account-tags.js";
+import { isMonitoredLease } from "@amzn/innovation-sandbox-shared/types/lease.js";
 import { Logger } from "@aws-lambda-powertools/logger";
+import { ConstraintViolationException } from "@aws-sdk/client-organizations";
 import { diff, IChange } from "json-diff-ts";
 
 export function summarizeUpdate(props: {
@@ -35,7 +36,9 @@ export function addCorrelationContext(
 /*
  * common properties that can be searched in log insights to group logs by
  */
-export function searchableAccountProperties(sandboxAccount: SandboxAccount) {
+export function searchableAccountProperties(
+  sandboxAccount: PersistedSandboxAccount,
+) {
   return {
     accountId: sandboxAccount.awsAccountId,
     accountEmail: sandboxAccount.email,
@@ -43,7 +46,7 @@ export function searchableAccountProperties(sandboxAccount: SandboxAccount) {
   };
 }
 
-export function searchableLeaseProperties(lease: Lease) {
+export function searchableLeaseProperties(lease: PersistedLease) {
   const baseProps = {
     endUser: lease.userEmail,
     leaseId: lease.uuid,
@@ -62,12 +65,69 @@ export function searchableLeaseProperties(lease: Lease) {
   }
 }
 
-export function searchableLeaseTemplateProperties(
-  leaseTemplate: LeaseTemplate,
-) {
+export function searchableLeaseTemplateProperties(leaseTemplate: {
+  uuid: string;
+  name: string;
+}) {
   return {
     leaseTemplateId: leaseTemplate.uuid,
     leaseTemplateName: leaseTemplate.name,
+  };
+}
+
+export interface AssignmentOperationContext {
+  leaseId: string;
+  principalId?: string;
+  principalType?: string;
+  intent?: string;
+  accountId?: string;
+}
+
+/**
+ * Common properties for assignment operations that can be searched in
+ * CloudWatch Insights to group logs by lease + principal + intent.
+ */
+export function searchableAssignmentProperties(
+  context: AssignmentOperationContext,
+) {
+  return {
+    leaseId: context.leaseId,
+    principalId: context.principalId,
+    principalType: context.principalType,
+    intent: context.intent,
+    accountId: context.accountId,
+  };
+}
+
+export function searchableBlueprintProperties(
+  blueprintWithStackSets: PersistedBlueprintWithStackSets,
+) {
+  const baseProperties = {
+    blueprintId: blueprintWithStackSets.blueprint.blueprintId,
+    blueprintName: blueprintWithStackSets.blueprint.name,
+    stackSetCount: blueprintWithStackSets.stackSets.length,
+  };
+
+  // Single StackSet: Include detailed properties for the one StackSet
+  if (blueprintWithStackSets.stackSets.length === 1) {
+    const stackSet = blueprintWithStackSets.stackSets[0];
+    return {
+      ...baseProperties,
+      stackSetId:
+        stackSet?.stackSetId ??
+        `missing-stackset-id-${blueprintWithStackSets.blueprint.blueprintId}`,
+      regions: stackSet?.regions.join(",") ?? "no-regions",
+    };
+  }
+
+  // Multiple StackSets: Include summary information
+  return {
+    ...baseProperties,
+    stackSetIds: blueprintWithStackSets.stackSets
+      .map((stackSet) => stackSet.stackSetId)
+      .join(","),
+    // Note: For multiple StackSets, regions vary per StackSet, so we don't include a single regions field
+    // Use individual StackSet logs for per-StackSet region information
   };
 }
 
@@ -113,21 +173,55 @@ function formatObjectDiff(objectDiff: IChange[], nesting = 0): string {
   return output;
 }
 
-export namespace AppInsightsLogPatterns {
-  type AppInsightsLogPattern = {
+export namespace LogPatterns {
+  type LogPattern = {
     patternName: string;
     pattern: string;
   };
-  export const AccountDrift: AppInsightsLogPattern = {
+  export const AccountDrift: LogPattern = {
     patternName: "AccountDrift",
     pattern: "Account Drift Detected",
   };
-  export const DataValidationWarning = {
+  export const DataValidationWarning: LogPattern = {
     patternName: "DataValidationWarning",
     pattern: "Invalid Records Found",
   };
-  export const EmailSendingError = {
+  export const EmailSendingError: LogPattern = {
     patternName: "EmailSendingError",
     pattern: "Failed to send email",
   };
+}
+
+export function logTaggingFailure(
+  logger: Logger,
+  accountId: string,
+  tagKeys: IsbAccountTagSuffix[],
+  error: unknown,
+): void {
+  const isTagSpaceExhausted =
+    error instanceof ConstraintViolationException &&
+    error.Reason === "MAX_TAG_LIMIT_EXCEEDED";
+  logger.warn("Failed to tag account", {
+    logDetailType: "TagResourceFailed",
+    reason: isTagSpaceExhausted ? "TagSpaceExhausted" : "ApiError",
+    accountId,
+    tagKeys,
+    errorName: error instanceof Error ? error.name : undefined,
+    errorMessage: error instanceof Error ? error.message : undefined,
+  } satisfies SubscribableLog);
+}
+
+export function logUntaggingFailure(
+  logger: Logger,
+  accountId: string,
+  tagKeys: IsbAccountTagSuffix[],
+  error: unknown,
+): void {
+  logger.warn("Failed to untag account", {
+    logDetailType: "UntagResourceFailed",
+    accountId,
+    tagKeys,
+    errorName: error instanceof Error ? error.name : undefined,
+    errorMessage: error instanceof Error ? error.message : undefined,
+  } satisfies SubscribableLog);
 }

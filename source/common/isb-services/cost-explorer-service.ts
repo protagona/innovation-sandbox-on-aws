@@ -2,18 +2,28 @@
 // SPDX-License-Identifier: Apache-2.0
 import { Logger } from "@aws-lambda-powertools/logger";
 import {
+  CostAllocationTagStatus,
   CostExplorerClient,
   GetCostAndUsageCommand,
   GetCostAndUsageCommandInput,
+  GetCostAndUsageCommandOutput,
   Granularity,
+  ListCostAllocationTagsCommand,
   ResultByTime,
+  UpdateCostAllocationTagsStatusCommand,
 } from "@aws-sdk/client-cost-explorer";
 import { DateTime, DateTimeUnit } from "luxon";
 import pThrottle from "p-throttle";
 
+import {
+  parseTagGroupValue,
+  toCeTagKey,
+  toIsbTagKey,
+} from "@amzn/innovation-sandbox-commons/utils/isb-account-tags.js";
+
 const logger = new Logger();
 export const COST_EXPLORER_CONFIG = {
-  MAX_ACCOUNTS_IN_FILTER: 199,
+  MAX_ACCOUNTS_IN_FILTER: 99,
   MAX_DAYS_FOR_HOURLY: 14,
 };
 
@@ -57,9 +67,42 @@ function* batch<T>(
 
 export class CostExplorerService {
   readonly costExplorerClient: CostExplorerClient;
+  readonly namespace: string;
 
-  constructor(props: { costExplorerClient: CostExplorerClient }) {
+  constructor(props: {
+    costExplorerClient: CostExplorerClient;
+    namespace: string;
+  }) {
     this.costExplorerClient = props.costExplorerClient;
+    this.namespace = props.namespace;
+  }
+
+  public async listCostAllocationTags(
+    tagKeys: string[],
+  ): Promise<Map<string, CostAllocationTagStatus>> {
+    const response = await this.costExplorerClient.send(
+      new ListCostAllocationTagsCommand({ TagKeys: tagKeys }),
+    );
+
+    return new Map<string, CostAllocationTagStatus>(
+      (response.CostAllocationTags ?? [])
+        .filter((tag) => tag.TagKey && tag.Status)
+        .map((tag) => [tag.TagKey!, tag.Status!]),
+    );
+  }
+
+  public async setCostAllocationTagsStatus(
+    tagKeys: string[],
+    status: CostAllocationTagStatus,
+  ): Promise<void> {
+    await this.costExplorerClient.send(
+      new UpdateCostAllocationTagsStatusCommand({
+        CostAllocationTagsStatus: tagKeys.map((TagKey) => ({
+          TagKey,
+          Status: status,
+        })),
+      }),
+    );
   }
 
   static toCostExplorerFormat(dt: DateTime, granularity: Granularity): string {
@@ -169,6 +212,114 @@ export class CostExplorerService {
     }
   }
 
+  /**
+   * Tag-based cost attribution per design §4.2.2. Issues `GetCostAndUsage`
+   * grouped by the `ISB-<namespace>:LeaseId` tag and returns a report keyed by
+   * lease UUID. Only leases whose tag was active in CE during the queried
+   * window (and produced cost) appear in the report — callers detect missing
+   * leases via `report.getCost(lease.uuid)` returning 0 and route them to the
+   * legacy fallback.
+   *
+   * Tag-grouping naturally buckets cost: a previous lease on the same account
+   * carries a different `LeaseId` value, so it cannot bleed into the current
+   * lease's bucket. Untagged cost lands under an empty value
+   * (`"ISB-<namespace>:LeaseId$"`) which the parser discards — so no `Tags`
+   * filter is needed in the request.
+   *
+   * Errors propagate. Per design §4.2.3, callers must NOT mask a CE failure by
+   * silently routing every lease to the legacy fallback — that would hide bugs
+   * in the tag-write path.
+   */
+  async getCostForLeasesByTag(
+    leaseIds: string[],
+    start: DateTime,
+    end: DateTime,
+  ): Promise<AccountsCostReport> {
+    const leasesCost = new AccountsCostReport();
+    if (leaseIds.length === 0) {
+      return leasesCost;
+    }
+
+    const queryEnd = CostExplorerService.toStartOfNextPeriod(
+      end,
+      Granularity.DAILY,
+    );
+    const baseParams: GetCostAndUsageCommandInput = {
+      TimePeriod: {
+        Start: CostExplorerService.toCostExplorerFormat(
+          start,
+          Granularity.DAILY,
+        ),
+        End: CostExplorerService.toCostExplorerFormat(
+          queryEnd,
+          Granularity.DAILY,
+        ),
+      },
+      Granularity: Granularity.DAILY,
+      Metrics: ["UnblendedCost"],
+      Filter: {
+        Not: {
+          Dimensions: {
+            Key: "RECORD_TYPE",
+            Values: ["Credit", "Refund"],
+            MatchOptions: ["EQUALS"],
+          },
+        },
+      },
+      GroupBy: [
+        {
+          Type: "TAG",
+          Key: toCeTagKey(toIsbTagKey(this.namespace, "LeaseId")),
+        },
+      ],
+    };
+
+    const leaseIdSet = new Set(leaseIds);
+    let nextPageToken: string | undefined = undefined;
+
+    do {
+      const response: GetCostAndUsageCommandOutput =
+        await this.costExplorerClient.send(
+          new GetCostAndUsageCommand({
+            ...baseParams,
+            NextPageToken: nextPageToken,
+          }),
+        );
+
+      if (!response.ResultsByTime || response.ResultsByTime.length === 0) {
+        logger.warn("No cost data available", {
+          start,
+          end: queryEnd,
+          leaseCount: leaseIds.length,
+        });
+      }
+
+      for (const result of response.ResultsByTime ?? []) {
+        for (const group of result.Groups ?? []) {
+          const leaseId = parseTagGroupValue(group.Keys?.[0]);
+          if (!leaseId || !leaseIdSet.has(leaseId)) continue;
+          const cost = Number.parseFloat(
+            group.Metrics?.UnblendedCost?.Amount ?? "0",
+          );
+          leasesCost.addCost(leaseId, cost);
+        }
+      }
+
+      nextPageToken = response.NextPageToken;
+    } while (nextPageToken);
+
+    return leasesCost;
+  }
+
+  /**
+   * Legacy pre-account-tagging cost attribution. Used by `lease-monitoring`
+   * as the fallback path for leases that did not receive tags — leases
+   * created before this feature shipped, or leases whose tag-write failed at
+   * approval (`TagResourceFailed` log).
+   *
+   * @deprecated
+   * Do not call from new code. New code should use {@link getCostForLeasesByTag}.
+   */
   async getCostForLeases(
     accountsWithStartDates: Record<string, DateTime>,
     end: DateTime,
@@ -206,6 +357,11 @@ export class CostExplorerService {
     return accountsCost;
   }
 
+  /**
+   * @deprecated Internal helper of the legacy {@link getCostForLeases} path.
+   * Removed when {@link getCostForLeases} is removed — see its JSDoc for
+   * removal prerequisites.
+   */
   private async _getCostForLeasesHourly(
     accountsWithStartDates: Record<string, DateTime>,
     start: DateTime,
@@ -237,6 +393,9 @@ export class CostExplorerService {
     return accountsCost;
   }
 
+  /**
+   * @deprecated
+   */
   private async _getCostForLeasesDaily(
     accountsWithStartDates: Record<string, DateTime>,
     start: DateTime,
@@ -250,6 +409,9 @@ export class CostExplorerService {
     );
   }
 
+  /**
+   * @deprecated
+   */
   async getCostByGranularityForLeases(
     start: DateTime,
     end: DateTime,
@@ -272,24 +434,65 @@ export class CostExplorerService {
       accounts,
       granularity,
     );
-    const command = new GetCostAndUsageCommand(params);
-    const response = await this.costExplorerClient.send(command);
+    const accountsCost = new AccountsCostReport();
+    let nextPageToken: string | undefined = undefined;
+    let pageCount = 0;
+    let resultByTimeCount = 0;
+    let rowCount = 0;
 
-    if (!response.ResultsByTime || response.ResultsByTime.length === 0) {
+    do {
+      const response: GetCostAndUsageCommandOutput =
+        await this.costExplorerClient.send(
+          new GetCostAndUsageCommand({
+            ...params,
+            NextPageToken: nextPageToken,
+          }),
+        );
+      const resultsByTime = response.ResultsByTime ?? [];
+
+      pageCount++;
+      resultByTimeCount += resultsByTime.length;
+      rowCount += resultsByTime.reduce(
+        (total, result) => total + (result.Groups?.length ?? 0),
+        0,
+      );
+      accountsCost.merge(
+        this.calculateTotalCostForLeases(
+          resultsByTime,
+          accountsWithStartDates,
+          granularity,
+        ),
+      );
+
+      nextPageToken = response.NextPageToken;
+    } while (nextPageToken);
+
+    if (resultByTimeCount === 0) {
       logger.warn("No cost data available", {
         start,
         end,
         accounts,
       });
-      return new AccountsCostReport();
     }
-    return this.calculateTotalCostForLeases(
-      response.ResultsByTime,
-      accountsWithStartDates,
-      granularity,
-    );
+
+    if (pageCount > 1) {
+      logger.info("Processed multi-page Cost Explorer lease query", {
+        start: start.toISO(),
+        end: end.toISO(),
+        granularity,
+        accountCount: accounts.length,
+        pageCount,
+        rowCount,
+      });
+    }
+
+    return accountsCost;
   }
 
+  /**
+   * Internal helper of the legacy {@link getCostForLeases} path.
+   * Remove when {@link getCostForLeases} is removed.
+   */
   private calculateTotalCostForLeases(
     resultByTime: ResultByTime[],
     accountsWithStartDates: Record<string, DateTime>,
@@ -313,6 +516,9 @@ export class CostExplorerService {
     return accountsCost;
   }
 
+  /**
+   * @deprecated
+   */
   private accumulateCostForResult(
     result: ResultByTime,
     dateFormat: string,
@@ -333,7 +539,7 @@ export class CostExplorerService {
             accountsWithStartDates[accountId]!.startOf(startOfUnit) <=
               periodStart
           ) {
-            const cost = parseFloat(
+            const cost = Number.parseFloat(
               group.Metrics?.UnblendedCost?.Amount ?? "0",
             );
             accountsCost.addCost(accountId, cost);
@@ -412,7 +618,7 @@ export class CostExplorerService {
             accountId &&
             accountsWithStartDates[accountId]!.startOf("day") <= periodStart
           ) {
-            const cost = parseFloat(
+            const cost = Number.parseFloat(
               group.Metrics?.UnblendedCost?.Amount ?? "0",
             );
             accountsCost.addCost(accountId, cost);
@@ -508,7 +714,7 @@ export class CostExplorerService {
       return;
     }
 
-    const cost = parseFloat(group.Metrics?.UnblendedCost?.Amount ?? "0");
+    const cost = Number.parseFloat(group.Metrics?.UnblendedCost?.Amount ?? "0");
 
     if (!dailyCostsByAccount[accountId]) {
       dailyCostsByAccount[accountId] = {};

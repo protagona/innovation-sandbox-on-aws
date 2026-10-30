@@ -1,38 +1,41 @@
 # Innovation Sandbox on AWS
 
-## Solution Overview
+**[🚀 Solution Landing Page](https://aws.amazon.com/solutions/implementations/innovation-sandbox-on-aws)** | **[🚧 Feature request](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/new?assignees=&labels=enhancement&template=feature_request.md&title=)** | **[🐛 Bug Report](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/new?assignees=&labels=bug&template=bug_report.md&title=)**
 
-The Innovation Sandbox on AWS solution allows cloud administrators to set up and recycle temporary sandbox environments by automating
-the implementation of security and governance policies,spend management mechanisms, and account recycling preferences through a web user interface (UI).
-Using the solution, customers can empower their teams to experiment, learn, and innovate with AWS services in production-isolated AWS accounts that are recycled after use.
-
-To find out more about Innovation Sandbox on AWS visit our [AWS Solutions](https://aws.amazon.com/solutions/implementations/innovation-sandbox-on-aws)
-page.
+**Note:** If you want to use the solution without building from source, navigate to Solution Landing Page.
 
 ## Table of Contents
 
-- [Innovation Sandbox on AWS](#innovation-sandbox-on-aws)
-  - [Solution Overview](#solution-overview)
-  - [Table of Contents](#table-of-contents)
-  - [Architecture](#architecture)
-  - [Prerequisites](#prerequisites)
-  - [Environment Variables](#environment-variables)
-  - [Deploy the Solution](#deploy-the-solution)
-    - [Deployment Prerequisites](#deployment-prerequisites)
-    - [Deploy from the AWS Console](#deploy-from-the-aws-console)
-    - [Deploy from Source](#deploy-from-source)
-    - [Post Deployment Tasks](#post-deployment-tasks)
-  - [Running Tests](#running-tests)
-    - [Unit Tests](#unit-tests)
-  - [Using Private ECR Repository](#using-private-ecr-repository)
-  - [Uninstalling the Solution](#uninstalling-the-solution)
-  - [Cost Scaling](#cost-scaling)
-  - [File Structure](#file-structure)
-  - [Pre-Commit](#pre-commit)
-  - [Collection of Operational Metrics](#collection-of-operational-metrics)
-  - [License](#license)
-  - [Contact Information](#contact-information)
-  - [Additional Resources](#additional-resources)
+- [Table of Contents](#table-of-contents)
+- [Solution Overview](#solution-overview)
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Environment Variables](#environment-variables)
+- [Deploy the Solution](#deploy-the-solution)
+  - [Deployment Prerequisites](#deployment-prerequisites)
+  - [Deploy from the AWS Console](#deploy-from-the-aws-console)
+  - [Deploy from Source](#deploy-from-source)
+  - [Post Deployment Tasks](#post-deployment-tasks)
+- [Scripts](#scripts)
+- [Running Tests](#running-tests)
+  - [Unit Tests](#unit-tests)
+- [Using Private ECR Repository](#using-private-ecr-repository)
+- [Uninstalling the Solution](#uninstalling-the-solution)
+- [Cost Scaling](#cost-scaling)
+- [File Structure](#file-structure)
+- [Pre-Commit](#pre-commit)
+- [Collection of Operational Metrics](#collection-of-operational-metrics)
+- [License](#license)
+- [Additional Resources](#additional-resources)
+
+## Solution Overview
+
+Innovation Sandbox on AWS enables cloud administrators to provision and recycle temporary AWS sandbox environments with automated security, governance, and cost management. Teams can experiment, learn, and innovate with AWS services in production-isolated accounts that are automatically cleaned up and returned to the pool after use.
+
+The solution provides a self-service web UI and API for requesting time-bound sandbox leases, configuring lease templates with budget and duration controls, sharing accounts across teams, deploying pre-configured infrastructure via blueprints, and monitoring costs through native AWS billing integration. Administrators manage all settings, including Service Control Policies, cleanup behavior, and notifications, directly from the application.
+
+To find out more about Innovation Sandbox on AWS visit our [AWS Solutions](https://aws.amazon.com/solutions/implementations/innovation-sandbox-on-aws)
+page.
 
 ## Architecture
 
@@ -44,9 +47,10 @@ For more details, please refer to the [Architecture Overview](https://docs.aws.a
 
 In order to test, build, and deploy the solution from source the following prerequisites will be required for your development environment:
 
-- MacOS or Amazon Linux 2 Operating System
+- MacOS or Amazon Linux 2023 Operating System
 - Cloned Repository
-- Node 22
+- Node 24
+- Java 21 (Amazon Corretto 21 recommended)
 - Python (Optional)
 - Pre-Commit (Optional)
 - Docker (Optional)
@@ -56,6 +60,13 @@ Once your development environment meets the minimum requirements install the nec
 ```shell
 npm install
 ```
+
+The source distribution intentionally includes the bootstrap manifests
+`source/api-client/package.json` and `source/api-server/package.json` without
+their generated sources. npm reads these manifests during installation so
+`npm run build` can generate and compile both packages with their locked
+TypeScript, Node, and Smithy dependencies. The model in `source/api-model`
+remains the source of truth.
 
 > **Note:** Many of the commands in this file expect you to have appropriate AWS CLI access to the target accounts configured. If you have a multi-account deployment you will need to switch between account credentials to perform the commands on the appropriate accounts.
 
@@ -111,6 +122,10 @@ npm run deploy:compute
 
 Before the solution is fully functional the post deployment tasks must be completed. See the [implementation guide](https://docs.aws.amazon.com/solutions/latest/innovation-sandbox-on-aws/post-deployment-configuration-tasks.html) for more details.
 
+## Scripts
+
+- [M2M Authentication Scripts](./scripts/m2m/README.md) — CLI tools for deploying per-client M2M roles, assuming them, and signing API requests with SigV4.
+
 ## Running Tests
 
 ### Unit Tests
@@ -141,7 +156,7 @@ Follow these steps to configure deployment to use a private ECR image:
    ```shell
    npm run docker:build-and-push
    ```
-   This will build the dockerfile located at `source/infrastructure/components/account-cleaner/Dockerfile` and push it to the ECR repo configured in your .env file.
+   This will build the dockerfile located at `source/infrastructure/lib/components/account-cleaner/image/Dockerfile` and push it to the ECR repo configured in your .env file.
 1. If you have already deployed the solution you will need to deploy the compute stack again to have the solution use the private ecr repo. To do that run the following command:
    ```shell
    npm run deploy:compute
@@ -178,8 +193,10 @@ root
 │   ├── global-s3-assets                # generated dist files for cdk synthesized cloudformation templates
 │   ├── regional-s3-assets              # generated dist files for zipped runtime assets such as lambda functions
 │   └── build-s3-dist.sh                # builds solution into distributable assets that can be deployed with cloudformation
-├── docs/                           # shell scripts to generate native cloudformation distributables
-├── scripts/                        # scripts used to run checks on the repository
+├── docs/                           # architecture diagrams and API specifications
+├── scripts/                        # utility and deployment scripts
+│   ├── cdk/                            # CDK bootstrap, deploy, and destroy wrappers
+│   └── m2m/                            # M2M authentication helper scripts
 ├── source/                         # source code separated into multiple stand alone packages
 │   ├── common                          # common libraries used across the solution
 │   ├── frontend                        # frontend vite application
@@ -230,17 +247,11 @@ or in the "[LICENSE](./LICENSE)" file accompanying this file. This file is distr
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 
-## Contact Information
-
-For questions or feedback about this solution, please contact:
-
-- AWS Solutions: [aws-solutions@amazon.com](mailto:aws-solutions@amazon.com)
-- GitHub Issues: Submit questions or issues through the [GitHub repository issues page](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues)
-
 ## Additional Resources
 
 - [AWS Solutions Library](https://aws.amazon.com/solutions/)
 - [AWS CloudFormation Documentation](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/Welcome.html)
+- [AWS CloudFormation StackSets Documentation](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/what-is-cfnstacksets.html)
 - [AWS CDK Documentation](https://docs.aws.amazon.com/cdk/v2/guide/home.html)
 - [AWS Account Management](https://docs.aws.amazon.com/accounts/latest/reference/accounts-welcome.html)
 - [AWS Nuke Repository](https://github.com/ekristen/aws-nuke)

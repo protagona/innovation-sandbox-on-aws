@@ -60,6 +60,11 @@ while [[ $# -gt 0 ]]; do
       shift # past argument
       shift # past value
       ;;
+    --scp-directory-path)
+      SCP_DIRECTORY_PATH="$2"
+      shift # past argument
+      shift # past value
+      ;;
     --log-level)
       LOG_LEVEL="$2"
       shift # past argument
@@ -138,6 +143,7 @@ CONTEXT_FLAGS+=("--context" "distOutputBucket=$DIST_OUTPUT_BUCKET")
 [ -n "$PUBLIC_ECR_TAG" ] && CONTEXT_FLAGS+=("--context" "publicEcrTag=$PUBLIC_ECR_TAG")
 [ -n "$PRIVATE_ECR_REPO" ] && CONTEXT_FLAGS+=("--context" "privateEcrRepo=$PRIVATE_ECR_REPO")
 [ -n "$NUKE_CONFIG_FILE_PATH" ] && CONTEXT_FLAGS+=("--context" "nukeConfigFilePath=$NUKE_CONFIG_FILE_PATH")
+[ -n "$SCP_DIRECTORY_PATH" ] && CONTEXT_FLAGS+=("--context" "scpDirectoryPath=$SCP_DIRECTORY_PATH")
 [ -n "$LOG_LEVEL" ] && CONTEXT_FLAGS+=("--context" "logLevel=$LOG_LEVEL")
 [ -n "$DEPLOYMENT_MODE" ] && CONTEXT_FLAGS+=("--context" "deploymentMode=$DEPLOYMENT_MODE")
 
@@ -160,9 +166,16 @@ rsync "$cdk_out_dir"/asset.* "$regional_assets_dir"
 
 print_step "Preparing Container Images"
 find "$root_dir/source" -name Dockerfile | while read file; do
-    parent_dir="$(basename "$(dirname "$file")")"
-    mkdir -p "$ecr_dir/$SOLUTION_NAME-$parent_dir"
-    cp "$file" "$ecr_dir/$SOLUTION_NAME-$parent_dir/Dockerfile"
+    source_dir="$(dirname "$file")"
+    image_dir="$(basename "$source_dir")"
+    if [ "$image_dir" = "image" ]; then
+        image_dir="$(basename "$(dirname "$source_dir")")"
+    fi
+    # Copy the whole context directory. Everything the Dockerfile COPYs must live
+    # here, because the build context at publish time is this staging directory
+    # rather than the source tree.
+    mkdir -p "$ecr_dir/$SOLUTION_NAME-$image_dir"
+    cp -r "$source_dir/." "$ecr_dir/$SOLUTION_NAME-$image_dir/"
 done
 
 print_final_success "S3 distribution build completed successfully!"

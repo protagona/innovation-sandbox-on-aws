@@ -1,23 +1,8 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
-import { z } from "zod";
-
-export const IsbRoleSchema = z.enum(["Admin", "Manager", "User"]);
-export const IsbUserSchema = z.object({
-  email: z.string().email(),
-  displayName: z.string().optional(),
-  userName: z.string().optional(),
-  userId: z.string().optional(),
-  roles: z.array(IsbRoleSchema).optional(),
-});
-
-export type IsbRole = z.infer<typeof IsbRoleSchema>;
-export type IsbUser = z.infer<typeof IsbUserSchema>;
 
 export type JSendResponse =
-  | JSendSuccessResponse
-  | JSendFailResponse
-  | JSendErrorResponse;
+  JSendSuccessResponse | JSendFailResponse | JSendErrorResponse;
 
 export type JSendSuccessResponse = {
   status: "success";
@@ -46,6 +31,13 @@ export const SSM_PARAM_NAME_PREFIX = "/InnovationSandbox";
 export const SSM_PARAM_NAME_PREFIX_SIMPLE = "InnovationSandbox";
 export const SECRET_NAME_PREFIX = "/InnovationSandbox";
 
+/**
+ * The CFN `Namespace` parameter's AllowedPattern. Reused by the env-schema
+ * validator (`BaseApiLambdaEnvironmentSchema`) and the CDK `NamespaceParam`
+ * so the rule lives in one place.
+ */
+export const NAMESPACE_PATTERN = "^[0-9a-zA-Z]{3,8}$";
+
 export function sharedAccountPoolSsmParamName(namespace: string) {
   return `${SSM_PARAM_NAME_PREFIX_SIMPLE}_${namespace}_AccountPool_Configuration`;
 }
@@ -56,4 +48,20 @@ export function sharedDataSsmParamName(namespace: string) {
 
 export function sharedIdcSsmParamName(namespace: string) {
   return `${SSM_PARAM_NAME_PREFIX_SIMPLE}_${namespace}_Idc_Configuration`;
+}
+
+export function computeRestApiIdSsmParamName(namespace: string) {
+  return `${SSM_PARAM_NAME_PREFIX_SIMPLE}_${namespace}_Compute_RestApiId`;
+}
+
+export function identityPoolAdminRoleName(namespace: string) {
+  return `${namespace}-isb-admin-role`;
+}
+
+export function identityPoolManagerRoleName(namespace: string) {
+  return `${namespace}-isb-manager-role`;
+}
+
+export function identityPoolUserRoleName(namespace: string) {
+  return `${namespace}-isb-user-role`;
 }

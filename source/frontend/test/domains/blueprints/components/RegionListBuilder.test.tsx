@@ -1,0 +1,127 @@
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
+import { describe, expect, it, vi } from "vitest";
+
+import { RegionListBuilder } from "@amzn/innovation-sandbox-frontend/domains/blueprints/components/RegionListBuilder";
+import { getConfig } from "@amzn/innovation-sandbox-frontend/helpers/config";
+import { createConfiguration } from "@amzn/innovation-sandbox-frontend/mocks/factories/configurationFactory";
+import { server } from "@amzn/innovation-sandbox-frontend/mocks/server";
+import { renderWithQueryClient } from "@amzn/innovation-sandbox-frontend/setupTests";
+
+describe("RegionListBuilder", () => {
+  it("should call onChange when Add all regions is clicked", async () => {
+    const user = userEvent.setup();
+    const mockOnChange = vi.fn();
+
+    server.use(
+      http.get(`${getConfig().ApiUrl}/configurations`, () => {
+        return HttpResponse.json({
+          status: "success",
+          data: createConfiguration({
+            isbManagedRegions: ["us-east-1", "us-west-2", "eu-west-1"],
+          }),
+        });
+      }),
+    );
+
+    renderWithQueryClient(
+      <RegionListBuilder selectedRegions={[]} onChange={mockOnChange} />,
+    );
+
+    // Click Add all regions
+    const addAllButton = screen.getByRole("button", {
+      name: /Add all regions/i,
+    });
+
+    // The button renders immediately but stays disabled until the config query
+    // resolves (it is disabled while loading / when no regions are known), so wait
+    // for it to be enabled rather than merely present before clicking.
+    await waitFor(() => expect(addAllButton).toBeEnabled());
+
+    await user.click(addAllButton);
+
+    // Verify onChange was called with all regions
+    await waitFor(() => {
+      expect(mockOnChange).toHaveBeenCalledWith([
+        "us-east-1",
+        "us-west-2",
+        "eu-west-1",
+      ]);
+    });
+  });
+
+  it("should display selected regions in sortable list", async () => {
+    const mockOnChange = vi.fn();
+
+    server.use(
+      http.get(`${getConfig().ApiUrl}/configurations`, () => {
+        return HttpResponse.json({
+          status: "success",
+          data: createConfiguration({
+            isbManagedRegions: ["us-east-1", "us-west-2"],
+          }),
+        });
+      }),
+    );
+
+    renderWithQueryClient(
+      <RegionListBuilder
+        selectedRegions={["us-east-1", "us-west-2"]}
+        onChange={mockOnChange}
+      />,
+    );
+
+    // Verify regions appear in list
+    await waitFor(() => {
+      expect(
+        screen.getByText("US East (N. Virginia) (us-east-1)"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("US West (Oregon) (us-west-2)"),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("should call onChange when Remove button is clicked", async () => {
+    const user = userEvent.setup();
+    const mockOnChange = vi.fn();
+
+    server.use(
+      http.get(`${getConfig().ApiUrl}/configurations`, () => {
+        return HttpResponse.json({
+          status: "success",
+          data: createConfiguration({
+            isbManagedRegions: ["us-east-1", "us-west-2"],
+          }),
+        });
+      }),
+    );
+
+    renderWithQueryClient(
+      <RegionListBuilder
+        selectedRegions={["us-east-1", "us-west-2"]}
+        onChange={mockOnChange}
+      />,
+    );
+
+    // Wait for regions to appear
+    await waitFor(() => {
+      expect(
+        screen.getByText("US East (N. Virginia) (us-east-1)"),
+      ).toBeInTheDocument();
+    });
+
+    // Click Remove button for first region
+    const removeButtons = screen.getAllByLabelText(/Delete us-east-1/i);
+    await user.click(removeButtons[0]);
+
+    // Verify onChange was called with filtered array
+    await waitFor(() => {
+      expect(mockOnChange).toHaveBeenCalledWith(["us-west-2"]);
+    });
+  });
+});

@@ -1,12 +1,11 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import {
-  GlobalConfig,
-  GlobalConfigSchema,
-} from "@amzn/innovation-sandbox-commons/data/global-config/global-config.js";
+import { GlobalConfig } from "@amzn/innovation-sandbox-commons/data/global-config/global-config.js";
 import { AccountCleanupFailureEventSchema } from "@amzn/innovation-sandbox-commons/events/account-cleanup-failure-event.js";
 import { AccountDriftEventSchema } from "@amzn/innovation-sandbox-commons/events/account-drift-detected-alert.js";
+import { AssignmentCreatedEventSchema } from "@amzn/innovation-sandbox-commons/events/assignment-created-event.js";
+import { AssignmentRemovedEventSchema } from "@amzn/innovation-sandbox-commons/events/assignment-removed-event.js";
 import { GroupCostReportGeneratedEventSchema } from "@amzn/innovation-sandbox-commons/events/group-cost-report-generated-event.js";
 import { GroupCostReportGenerationFailureEventSchema } from "@amzn/innovation-sandbox-commons/events/group-cost-report-generated-failure-event.js";
 import { EventDetailTypes } from "@amzn/innovation-sandbox-commons/events/index.js";
@@ -15,6 +14,7 @@ import { LeaseBudgetThresholdTriggeredEventSchema } from "@amzn/innovation-sandb
 import { LeaseDeniedEventSchema } from "@amzn/innovation-sandbox-commons/events/lease-denied-event.js";
 import { LeaseExpirationAlertEventSchema } from "@amzn/innovation-sandbox-commons/events/lease-duration-threshold-breached-alert.js";
 import { LeaseFrozenEventSchema } from "@amzn/innovation-sandbox-commons/events/lease-frozen-event.js";
+import { LeaseProvisioningFailedEventSchema } from "@amzn/innovation-sandbox-commons/events/lease-provisioning-failed-event.js";
 import { LeaseRequestedEventSchema } from "@amzn/innovation-sandbox-commons/events/lease-requested-event.js";
 import { LeaseTerminatedEventSchema } from "@amzn/innovation-sandbox-commons/events/lease-terminated-event.js";
 import { LeaseUnfrozenEventSchema } from "@amzn/innovation-sandbox-commons/events/lease-unfrozen-event.js";
@@ -30,6 +30,7 @@ import { generateSchemaData } from "@amzn/innovation-sandbox-commons/test/genera
 import {
   createEventBridgeEvent,
   mockContext,
+  mockGlobalConfig,
 } from "@amzn/innovation-sandbox-commons/test/lambdas/fixtures.js";
 import {
   bulkStubEnv,
@@ -60,14 +61,11 @@ const emailServiceSpy = vi
 
 beforeAll(async () => {
   bulkStubEnv(testEnv);
-  mockedGlobalConfig = generateSchemaData(GlobalConfigSchema, {
-    notification: { emailFrom: "test@example.com" },
-  });
+  mockedGlobalConfig = mockGlobalConfig();
+  mockedGlobalConfig.notification.emailFrom = "test@example.com";
   mockedContext = mockContext(testEnv, mockedGlobalConfig);
   handler = (
-    await import(
-      "@amzn/innovation-sandbox-email-notification/email-notification-handler.js"
-    )
+    await import("@amzn/innovation-sandbox-email-notification/email-notification-handler.js")
   ).handler;
 });
 beforeEach(() => {
@@ -114,6 +112,10 @@ describe("email-notification-handler", () => {
       eventName: EventDetailTypes.LeaseUnfrozen,
       schema: LeaseUnfrozenEventSchema,
     },
+    [EventDetailTypes.LeaseProvisioningFailed]: {
+      eventName: EventDetailTypes.LeaseProvisioningFailed,
+      schema: LeaseProvisioningFailedEventSchema,
+    },
     [EventDetailTypes.AccountCleanupFailure]: {
       eventName: EventDetailTypes.AccountCleanupFailure,
       schema: AccountCleanupFailureEventSchema,
@@ -138,6 +140,14 @@ describe("email-notification-handler", () => {
       eventName: EventDetailTypes.GroupCostReportGeneratedFailure,
       schema: GroupCostReportGenerationFailureEventSchema,
     },
+    [EventDetailTypes.AssignmentCreated]: {
+      eventName: EventDetailTypes.AssignmentCreated,
+      schema: AssignmentCreatedEventSchema,
+    },
+    [EventDetailTypes.AssignmentRemoved]: {
+      eventName: EventDetailTypes.AssignmentRemoved,
+      schema: AssignmentRemovedEventSchema,
+    },
   };
 
   const testInputs = Object.values(testCases);
@@ -160,7 +170,7 @@ describe("email-notification-handler", () => {
   it("should exit early for unsubscribed event when email is not configured", async () => {
     const configWithoutEmail = {
       ...mockedGlobalConfig,
-      notification: { emailFrom: undefined },
+      notification: { emailFrom: "" },
     };
     const contextWithoutEmail = mockContext(testEnv, configWithoutEmail);
     mockAppConfigMiddleware(configWithoutEmail);
@@ -177,7 +187,7 @@ describe("email-notification-handler", () => {
     it("should exit early when emailFrom is undefined", async () => {
       const configWithoutEmail = {
         ...mockedGlobalConfig,
-        notification: { emailFrom: undefined },
+        notification: { emailFrom: "" },
       };
       const contextWithoutEmail = mockContext(testEnv, configWithoutEmail);
       mockAppConfigMiddleware(configWithoutEmail);

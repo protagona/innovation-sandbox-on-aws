@@ -10,12 +10,15 @@ export const SubscribedEmailEvents = [
   EventDetailTypes.LeaseTerminated,
   EventDetailTypes.LeaseFrozen,
   EventDetailTypes.LeaseUnfrozen,
+  EventDetailTypes.LeaseProvisioningFailed,
   EventDetailTypes.AccountCleanupFailure,
   EventDetailTypes.AccountDriftDetected,
   EventDetailTypes.LeaseBudgetThresholdBreachedAlert,
   EventDetailTypes.LeaseDurationThresholdBreachedAlert,
   EventDetailTypes.GroupCostReportGenerated,
   EventDetailTypes.GroupCostReportGeneratedFailure,
+  EventDetailTypes.AssignmentCreated,
+  EventDetailTypes.AssignmentRemoved,
 ];
 
 export type EmailEventName = (typeof SubscribedEmailEvents)[number];

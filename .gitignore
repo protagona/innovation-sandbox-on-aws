@@ -21,6 +21,25 @@ staging/
 tmp/
 temp/
 .temp_*/
+.test-reports
+.patch-artifacts/
+scratch/
+scripts/m2m/internal/smithy-c2j-workspace/
+scripts/m2m/internal/smithy-c2j-workspace.lock
+
+# Kiro
+.kiro/reviews/
+.kiro/specs/tmp-*
+.kiro/.solnexus-installed-skills
+.kiro/hooks/solnexus-skill-aware-subagent.kiro.hook
+# AIM-managed agents (synced by setup-kiro-ide.sh from SolNexusAICapabilities)
+# Only ISB-specific agents should be committed (isb-* prefix)
+.kiro/agents/solnexus-*.md
+# AIM-managed skills (synced from SolNexusAICapabilities)
+# Only ISB-specific skills (isb-* prefix) are committed
+.kiro/skills/*
+!.kiro/skills/isb-*/
+!.kiro/skills/README.md
 
 ### VisualStudioCode ###
 .vscode
@@ -31,3 +50,20 @@ temp/
 .idea
 CLAUDE.md
 *_IMPLEMENTATION_PLAN.md
+
+# security scanner artifacts
+.security-scan/
+
+# Generated Smithy packages. Produced by `npm run smithy:generate`; the model in
+# source/api-model/ is the source of truth. Ignore generated contents directly so
+# committed package manifests and server tsconfigs remain visible to both Git and
+# rsync without a separate allowlist.
+source/api-client/.gitignore
+source/api-client/LICENSE
+source/api-client/README.md
+source/api-client/api-extractor.json
+source/api-client/src/
+source/api-client/dist-*/
+source/api-client/tsconfig*.json
+source/api-server/domains/
+source/api-server/dist-*/

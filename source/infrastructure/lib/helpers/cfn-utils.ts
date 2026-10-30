@@ -148,9 +148,9 @@ export function addParameterGroup(
   });
 }
 
-export class ConditionAspect<T extends new (...args: never[]) => CfnResource>
-  implements IAspect
-{
+export class ConditionAspect<
+  T extends new (...args: never[]) => CfnResource,
+> implements IAspect {
   constructor(
     private condition: CfnCondition,
     private resourceType?: T,
@@ -244,6 +244,38 @@ export class OptionalParameter extends ParameterWithLabel {
       this.valueIfEmpty,
       this.valueAsString,
     ).toString();
+  }
+}
+
+/**
+ * A CommaDelimitedList parameter that embeds a "has values" CfnCondition.
+ * Useful for optional list parameters where you need to conditionally include
+ * the values only when the parameter is non-empty.
+ */
+export class OptionalListParameter extends ParameterWithLabel {
+  private _hasValuesCondition?: CfnCondition;
+
+  constructor(scope: Construct, id: string, props: ParameterWithLabelProps) {
+    super(scope, id, {
+      ...props,
+      type: "CommaDelimitedList",
+      default: "",
+    });
+  }
+
+  get hasValuesCondition(): CfnCondition {
+    if (!this._hasValuesCondition) {
+      this._hasValuesCondition = new CfnCondition(
+        this.stack,
+        `Has${this.node.id}`,
+        {
+          expression: Fn.conditionNot(
+            Fn.conditionEquals(Fn.join("", this.valueAsList), ""),
+          ),
+        },
+      );
+    }
+    return this._hasValuesCondition;
   }
 }
 

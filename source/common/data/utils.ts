@@ -54,6 +54,25 @@ function replaceNullWithUndefined<T>(val: T) {
 }
 
 /**
+ * Removes null fields from an object for DynamoDB sparse GSI compatibility.
+ * DynamoDB GSI keys cannot be NULL - they must either have a value or not exist.
+ *
+ * @param item - Object to transform
+ * @returns New object with null fields removed
+ */
+export function removeNullFieldsForDynamoDB<T extends Record<string, any>>(
+  item: T,
+): T {
+  const transformed = { ...item };
+  Object.keys(transformed).forEach((key) => {
+    if (transformed[key] === null) {
+      delete transformed[key];
+    }
+  });
+  return transformed;
+}
+
+/**
  * returns a decorator that validates the item against the provided schema
  * The schema should include version validation in its metadata field
  * @param schema zod schema for data validation (including version validation)
@@ -120,13 +139,16 @@ export function parseResults<T extends z.ZodSchema>(
       result: [],
     };
   }
-  const parsed = items.map((item) => schema.safeParse(item));
-  const validItems: T[] = parsed
-    .filter((parsedItem) => parsedItem.success)
-    .map((parsedItem) => parsedItem.data);
-  const errors: z.ZodError<T>[] = parsed
-    .filter((parsedItem) => !parsedItem.success)
-    .map((parsedItem) => parsedItem.error);
+  const validItems: z.infer<T>[] = [];
+  const errors: z.ZodError[] = [];
+  for (const item of items) {
+    const parsedItem = schema.safeParse(item);
+    if (parsedItem.success) {
+      validItems.push(parsedItem.data);
+    } else {
+      errors.push(parsedItem.error);
+    }
+  }
   const errorMessage = errors.length == 0 ? undefined : formatErrors(errors);
 
   return {
@@ -155,4 +177,11 @@ export function parseSingleItemResult<T extends z.ZodSchema>(
       result: parsedItem.data,
     };
   }
+}
+
+/** Splits an array into chunks of the specified size. */
+export function chunk<T>(items: T[], size: number): T[][] {
+  return Array.from({ length: Math.ceil(items.length / size) }, (_, i) =>
+    items.slice(i * size, (i + 1) * size),
+  );
 }

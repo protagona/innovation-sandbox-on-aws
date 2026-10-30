@@ -1,22 +1,21 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { screen } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { DateTime } from "luxon";
 import { BrowserRouter } from "react-router-dom";
-import { describe, expect, test, vi } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import {
-  Lease,
-  LeaseWithLeaseId,
-} from "@amzn/innovation-sandbox-commons/data/lease/lease.js";
 import { LeasePanel } from "@amzn/innovation-sandbox-frontend/domains/home/components/LeasePanel";
+import { LeaseView } from "@amzn/innovation-sandbox-frontend/domains/leases/model";
+import { ModalProvider } from "@amzn/innovation-sandbox-frontend/hooks/useModal";
+import { createConfiguration } from "@amzn/innovation-sandbox-frontend/mocks/factories/configurationFactory";
 import {
   createActiveLease,
   createExpiredLease,
   createPendingLease,
 } from "@amzn/innovation-sandbox-frontend/mocks/factories/leaseFactory";
 import { renderWithQueryClient } from "@amzn/innovation-sandbox-frontend/setupTests";
-import moment from "moment";
 
 // Mock the AccountLoginLink component
 vi.mock(
@@ -28,17 +27,94 @@ vi.mock(
   }),
 );
 
+const mockTerminateLease = vi.fn();
+vi.mock(
+  "@amzn/innovation-sandbox-frontend/domains/leases/hooks",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("@amzn/innovation-sandbox-frontend/domains/leases/hooks")
+      >();
+    return {
+      ...actual,
+      useTerminateLease: () => ({
+        mutateAsync: mockTerminateLease,
+        isPending: false,
+      }),
+    };
+  },
+);
+
+const mockUseUser = vi.fn();
+vi.mock("@amzn/innovation-sandbox-frontend/hooks/useUser", () => ({
+  useUser: () => mockUseUser(),
+}));
+
+const mockUseGetConfigurations = vi.fn();
+vi.mock("@amzn/innovation-sandbox-frontend/domains/settings/hooks", () => ({
+  useGetConfigurations: () => mockUseGetConfigurations(),
+}));
+
+const mockShowSuccessToast = vi.fn();
+const mockShowErrorToast = vi.fn();
+vi.mock("@amzn/innovation-sandbox-frontend/components/Toast", () => ({
+  showSuccessToast: (...args: unknown[]) => mockShowSuccessToast(...args),
+  showErrorToast: (...args: unknown[]) => mockShowErrorToast(...args),
+}));
+
+const ownerEmail = "owner@example.com";
+const ownerUser = {
+  type: "user" as const,
+  email: ownerEmail,
+  userId: "owner-id",
+  roles: ["User" as const],
+};
+
+// Shared leases config so per-test overrides flip a single field via spread
+// instead of respelling every field. createConfiguration shallow-merges the
+// leases override onto schema defaults.
+const defaultLeasesConfig = {
+  requireMaxBudget: false,
+  maxBudget: 100,
+  requireMaxDuration: false,
+  maxDurationHours: 999,
+  maxLeasesPerUser: 2,
+  ttl: 30,
+  leaseSharingEnabled: false,
+  allowUserLeaseTermination: true,
+  leaseRequestWindowHours: 168,
+  maxLeaseRequestsPerWindow: 10,
+  enablePrincipalSearch: true,
+};
+
 describe("LeasePanel", () => {
-  const renderComponent = (lease: Lease) => {
+  const renderComponent = (lease: LeaseView) => {
     return renderWithQueryClient(
-      <BrowserRouter>
-        <LeasePanel lease={lease as LeaseWithLeaseId} />
-      </BrowserRouter>,
+      <ModalProvider>
+        <BrowserRouter>
+          <LeasePanel lease={lease as LeaseView} />
+        </BrowserRouter>
+      </ModalProvider>,
     );
   };
 
+  beforeEach(() => {
+    mockTerminateLease.mockReset();
+    mockShowSuccessToast.mockReset();
+    mockShowErrorToast.mockReset();
+    mockUseUser.mockReset();
+    mockUseGetConfigurations.mockReset();
+    mockUseUser.mockReturnValue({ user: ownerUser });
+    mockUseGetConfigurations.mockReturnValue({
+      data: createConfiguration({ leases: defaultLeasesConfig }),
+    });
+  });
+
   test("renders active lease correctly", () => {
-    const activeLease = createActiveLease();
+    const activeLease = createActiveLease({
+      maxSpend: 100,
+      totalCostAccrued: 25,
+    });
     renderComponent(activeLease);
 
     expect(
@@ -50,11 +126,23 @@ describe("LeasePanel", () => {
       screen.getByText(`Login to account ${activeLease.awsAccountId}`),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(`$${activeLease.maxSpend!.toString()}`),
+      screen.getByText(
+        `$${activeLease.totalCostAccrued.toString()} of $${activeLease.maxSpend!.toString()}`,
+      ),
     ).toBeInTheDocument();
-    expect(
-      screen.getByText(`$${activeLease.totalCostAccrued.toString()}`),
-    ).toBeInTheDocument();
+  });
+
+  test("links the lease title to its details page", () => {
+    const activeLease: LeaseView = {
+      ...createActiveLease(),
+      leaseId: "encoded-lease-id",
+    };
+    renderComponent(activeLease);
+
+    const titleLink = screen.getByRole("link", {
+      name: `${activeLease.originalLeaseTemplateName} (${activeLease.uuid.slice(0, 8)})`,
+    });
+    expect(titleLink).toHaveAttribute("href", "/leases/encoded-lease-id");
   });
 
   test("renders pending lease correctly", () => {
@@ -83,15 +171,17 @@ describe("LeasePanel", () => {
     ).toBeInTheDocument();
     expect(screen.getByText(leaseWithBudget.awsAccountId)).toBeInTheDocument();
     expect(
-      screen.getByText(`$${leaseWithBudget.maxSpend!.toString()}`),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(`$${leaseWithBudget.totalCostAccrued.toString()}`),
+      screen.getByText(
+        `$${leaseWithBudget.totalCostAccrued.toString()} of $${leaseWithBudget.maxSpend!.toString()}`,
+      ),
     ).toBeInTheDocument();
   });
 
   test("renders budget information correctly for a lease without max budget", () => {
-    const leaseWithoutBudget = createActiveLease({ maxSpend: undefined });
+    const leaseWithoutBudget = createActiveLease({
+      maxSpend: undefined,
+      totalCostAccrued: 10,
+    });
 
     renderComponent(leaseWithoutBudget);
     expect(
@@ -109,12 +199,10 @@ describe("LeasePanel", () => {
   test("displays expiration date correctly", () => {
     const futureDate = new Date();
     futureDate.setDate(futureDate.getDate() + 7);
+    futureDate.setMinutes(futureDate.getMinutes() + 1);
     const leaseWithFutureExpiry = createActiveLease({
       expirationDate: futureDate.toISOString(),
     });
-
-    const pastDate = new Date();
-    pastDate.setDate(pastDate.getDate() - 7);
 
     renderComponent(leaseWithFutureExpiry);
     expect(screen.getByText(/in 7 days/)).toBeInTheDocument();
@@ -133,8 +221,21 @@ describe("LeasePanel", () => {
     });
     renderComponent(leaseWithoutExpiry);
 
-    expect(screen.getByText(/a day/)).toBeInTheDocument();
+    expect(screen.getByText(/24 hours/)).toBeInTheDocument();
     expect(screen.getByText("after approval")).toBeInTheDocument();
+  });
+
+  test("describes provisioning duration relative to lease publish", () => {
+    const provisioningLease = createActiveLease({
+      status: "Provisioning",
+      expirationDate: undefined,
+      leaseDurationInHours: 24,
+    });
+    renderComponent(provisioningLease);
+
+    expect(screen.getByText("24 hours")).toBeInTheDocument();
+    expect(screen.getByText("from lease publish")).toBeInTheDocument();
+    expect(screen.queryByText("No expiry")).not.toBeInTheDocument();
   });
 
   test("handles lease without expirationDate and duration", () => {
@@ -148,17 +249,45 @@ describe("LeasePanel", () => {
   });
 
   test.each([
-    { amount: 1, unit: "hours", expected: "an hour ago" },
+    ["Admin", "Provisioning", true],
+    ["Manager", "Provisioning", false],
+    ["Admin", "Frozen", true],
+    ["Manager", "Frozen", true],
+    ["User", "Frozen", false],
+    ["User", "Active", true],
+  ] as const)(
+    "renders Login for %s on %s leases: %s",
+    (role, status, expected) => {
+      mockUseUser.mockReturnValue({
+        user: { ...ownerUser, roles: [role] },
+        isAdmin: role === "Admin",
+        isManager: role === "Manager",
+      });
+      const lease = createActiveLease({ status });
+
+      renderComponent(lease);
+
+      const login = screen.queryByText(/Login to account/i);
+      if (expected) {
+        expect(login).toBeInTheDocument();
+      } else {
+        expect(login).not.toBeInTheDocument();
+      }
+    },
+  );
+
+  test.each([
+    { amount: 1, unit: "hours", expected: "1 hour ago" },
     { amount: 3, unit: "hours", expected: "3 hours ago" },
-    { amount: 1, unit: "days", expected: "a day ago" },
+    { amount: 1, unit: "days", expected: "1 day ago" },
     { amount: 3, unit: "days", expected: "3 days ago" },
-    { amount: 1, unit: "months", expected: "a month ago" },
+    { amount: 1, unit: "months", expected: "1 month ago" },
   ])(
     "displays proper expiry date for expired lease - $expected",
     ({ amount, unit, expected }) => {
-      const expirationDate = moment()
-        .subtract(amount, unit as any)
-        .toISOString();
+      const expirationDate = DateTime.now()
+        .minus({ [unit]: amount })
+        .toISO();
       const expiredLease = createExpiredLease({
         endDate: expirationDate,
       });
@@ -168,4 +297,187 @@ describe("LeasePanel", () => {
       expect(screen.getByText(expected)).toBeInTheDocument();
     },
   );
+
+  describe("Terminate lease button visibility", () => {
+    test("shows button when lease is Active, owned by current user, and feature enabled", () => {
+      const lease = createActiveLease({ userEmail: ownerEmail });
+      renderComponent(lease);
+      expect(
+        screen.getByRole("button", { name: "Terminate lease" }),
+      ).toBeInTheDocument();
+    });
+
+    test("hides button when lease is owned by a different user", () => {
+      const lease = createActiveLease({ userEmail: "other@example.com" });
+      renderComponent(lease);
+      expect(
+        screen.queryByRole("button", { name: "Terminate lease" }),
+      ).not.toBeInTheDocument();
+    });
+
+    test("hides button when allowUserLeaseTermination is disabled", () => {
+      mockUseGetConfigurations.mockReturnValue({
+        data: createConfiguration({
+          leases: { ...defaultLeasesConfig, allowUserLeaseTermination: false },
+        }),
+      });
+      const lease = createActiveLease({ userEmail: ownerEmail });
+      renderComponent(lease);
+      expect(
+        screen.queryByRole("button", { name: "Terminate lease" }),
+      ).not.toBeInTheDocument();
+    });
+
+    test("hides button when lease is not Active (e.g., Frozen)", () => {
+      const lease = createActiveLease({
+        userEmail: ownerEmail,
+        status: "Frozen",
+      });
+      renderComponent(lease);
+      expect(
+        screen.queryByRole("button", { name: "Terminate lease" }),
+      ).not.toBeInTheDocument();
+    });
+
+    test("hides button when no user is loaded yet", () => {
+      mockUseUser.mockReturnValue({ user: undefined });
+      const lease = createActiveLease({ userEmail: ownerEmail });
+      renderComponent(lease);
+      expect(
+        screen.queryByRole("button", { name: "Terminate lease" }),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Terminate confirmation modal", () => {
+    test("opens modal with type-to-confirm input when button clicked", async () => {
+      const lease = createActiveLease({ userEmail: ownerEmail });
+      renderComponent(lease);
+
+      fireEvent.click(screen.getByRole("button", { name: "Terminate lease" }));
+
+      await waitFor(() => {
+        expect(
+          screen.getByRole("heading", { name: "Terminate Lease" }),
+        ).toBeInTheDocument();
+      });
+      expect(screen.getByLabelText(/To confirm, type/)).toBeInTheDocument();
+    });
+
+    test("shows the account ID and human-readable lease ID being terminated", async () => {
+      const leaseWithId: LeaseView = {
+        ...createActiveLease({ userEmail: ownerEmail, uuid: "lease-uuid-123" }),
+        leaseId: "base64-composite-key",
+      };
+      renderComponent(leaseWithId);
+
+      fireEvent.click(screen.getByRole("button", { name: "Terminate lease" }));
+
+      const dialog = await screen.findByRole("dialog");
+      // Scope to the dialog: the panel body also prints awsAccountId, so an
+      // unscoped query would match twice.
+      expect(
+        within(dialog).getByText(leaseWithId.awsAccountId),
+      ).toBeInTheDocument();
+      // The modal shows the human-readable uuid, not the opaque base64 leaseId.
+      expect(within(dialog).getByText("lease-uuid-123")).toBeInTheDocument();
+      expect(
+        within(dialog).queryByText("base64-composite-key"),
+      ).not.toBeInTheDocument();
+    });
+
+    test("primary button is disabled until 'terminate' is typed", async () => {
+      const lease = createActiveLease({ userEmail: ownerEmail });
+      renderComponent(lease);
+
+      fireEvent.click(screen.getByRole("button", { name: "Terminate lease" }));
+
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: "Terminate Lease" }),
+        ).toBeDisabled();
+      });
+
+      const input = screen.getByLabelText(/To confirm, type/);
+      fireEvent.change(input, { target: { value: "terminate" } });
+
+      await waitFor(() => {
+        expect(
+          screen.getByRole("button", { name: "Terminate Lease" }),
+        ).toBeEnabled();
+      });
+    });
+
+    test("calls terminateLease mutation on confirm and fires success toast", async () => {
+      mockTerminateLease.mockResolvedValueOnce(undefined);
+      const leaseWithId: LeaseView = {
+        ...createActiveLease({ userEmail: ownerEmail }),
+        leaseId: "test-lease-id",
+      };
+      renderComponent(leaseWithId);
+
+      fireEvent.click(screen.getByRole("button", { name: "Terminate lease" }));
+
+      await waitFor(() => {
+        expect(screen.getByLabelText(/To confirm, type/)).toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByLabelText(/To confirm, type/), {
+        target: { value: "terminate" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Terminate Lease" }));
+
+      await waitFor(() => {
+        expect(mockTerminateLease).toHaveBeenCalledWith("test-lease-id");
+      });
+      await waitFor(() => {
+        expect(mockShowSuccessToast).toHaveBeenCalledWith(
+          "Lease was successfully terminated.",
+        );
+      });
+      // Modal closes after success: confirmation input no longer in DOM.
+      await waitFor(() => {
+        expect(
+          screen.queryByLabelText(/To confirm, type/),
+        ).not.toBeInTheDocument();
+      });
+      expect(mockShowErrorToast).not.toHaveBeenCalled();
+    });
+
+    test("fires error toast and keeps modal open when mutation rejects", async () => {
+      mockTerminateLease.mockRejectedValueOnce(new Error("backend 429"));
+      // Production code calls console.error for operator triage; silence it
+      // so the test output stays clean. Not asserted - it's a debugging
+      // affordance, not a contract. Restore at the end so the spy cannot leak
+      // into tests added after this one.
+      const consoleErrorSpy = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => {});
+      const leaseWithId: LeaseView = {
+        ...createActiveLease({ userEmail: ownerEmail }),
+        leaseId: "test-lease-id",
+      };
+      renderComponent(leaseWithId);
+
+      fireEvent.click(screen.getByRole("button", { name: "Terminate lease" }));
+      await waitFor(() => {
+        expect(screen.getByLabelText(/To confirm, type/)).toBeInTheDocument();
+      });
+      fireEvent.change(screen.getByLabelText(/To confirm, type/), {
+        target: { value: "terminate" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Terminate Lease" }));
+
+      await waitFor(() => {
+        expect(mockShowErrorToast).toHaveBeenCalledWith(
+          "Lease termination failed, try again.",
+          "Failed to terminate lease",
+        );
+      });
+      // Modal stays open after failure so the user can retry.
+      expect(screen.getByLabelText(/To confirm, type/)).toBeInTheDocument();
+      expect(mockShowSuccessToast).not.toHaveBeenCalled();
+      consoleErrorSpy.mockRestore();
+    });
+  });
 });

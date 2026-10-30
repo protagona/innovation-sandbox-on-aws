@@ -5,11 +5,7 @@ import { Tracer } from "@aws-lambda-powertools/tracer";
 import { Context, EventBridgeEvent } from "aws-lambda";
 
 import { SandboxAccountStore } from "@amzn/innovation-sandbox-commons/data/sandbox-account/sandbox-account-store.js";
-import {
-  IsbOu,
-  IsbOuSchema,
-  SandboxAccount,
-} from "@amzn/innovation-sandbox-commons/data/sandbox-account/sandbox-account.js";
+import { PersistedSandboxAccount } from "@amzn/innovation-sandbox-commons/data/sandbox-account/sandbox-account.js";
 import { stream } from "@amzn/innovation-sandbox-commons/data/utils.js";
 import { AccountDriftDetectedAlert } from "@amzn/innovation-sandbox-commons/events/account-drift-detected-alert.js";
 import { IsbServices } from "@amzn/innovation-sandbox-commons/isb-services/index.js";
@@ -22,10 +18,14 @@ import baseMiddlewareBundle from "@amzn/innovation-sandbox-commons/lambda/middle
 import { ValidatedEnvironment } from "@amzn/innovation-sandbox-commons/lambda/middleware/environment-validator.js";
 import { SubscribableLog } from "@amzn/innovation-sandbox-commons/observability/log-types.js";
 import {
-  AppInsightsLogPatterns,
+  LogPatterns,
   searchableAccountProperties,
 } from "@amzn/innovation-sandbox-commons/observability/logging.js";
 import { fromTemporaryIsbOrgManagementCredentials } from "@amzn/innovation-sandbox-commons/utils/cross-account-roles.js";
+import {
+  IsbOu,
+  IsbOuSchema,
+} from "@amzn/innovation-sandbox-shared/types/sandbox-account.js";
 
 const serviceName = "AccountDriftMonitoring";
 const tracer = new Tracer();
@@ -57,7 +57,7 @@ export async function doAccountDriftMonitoring(
     (event) => event.account.driftAtLastScan,
   )) {
     logger.warn(
-      `${AppInsightsLogPatterns.AccountDrift.pattern}: (${driftingAccount.account.awsAccountId}) sending message to ISB bus`,
+      `${LogPatterns.AccountDrift.pattern}: (${driftingAccount.account.awsAccountId}) sending message to ISB bus`,
       {
         ...searchableAccountProperties(driftingAccount.account),
         logDetailType: "AccountDrift",
@@ -117,7 +117,7 @@ export async function doAccountDriftMonitoring(
       continue; //expected
     }
     logger.warn(
-      `${AppInsightsLogPatterns.AccountDrift.pattern}: Untracked account (${untrackedAccountId}) found in ${inOu} OU!, sending message to ISB bus`,
+      `${LogPatterns.AccountDrift.pattern}: Untracked account (${untrackedAccountId}) found in ${inOu} OU!, sending message to ISB bus`,
       {
         logDetailType: "AccountDrift",
         accountId: untrackedAccountId,
@@ -145,9 +145,9 @@ async function detectDriftStatus(
   accountStore: SandboxAccountStore,
 ) {
   const untrackedAccounts = await discoverAllAccountsInOUs(orgsService);
-  const accountsNotInDrift: SandboxAccount[] = [];
+  const accountsNotInDrift: PersistedSandboxAccount[] = [];
   const accountsInDrift: {
-    account: SandboxAccount;
+    account: PersistedSandboxAccount;
     actualOu?: IsbOu;
     expectedOu: IsbOu;
   }[] = [];

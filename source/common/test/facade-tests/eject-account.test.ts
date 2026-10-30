@@ -2,26 +2,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { PaginatedQueryResult } from "@amzn/innovation-sandbox-commons/data/common-types.js";
-import { GlobalConfigSchema } from "@amzn/innovation-sandbox-commons/data/global-config/global-config.js";
 import {
-  MonitoredLease,
-  MonitoredLeaseSchema,
+  PersistedMonitoredLease,
+  PersistedMonitoredLeaseSchema,
 } from "@amzn/innovation-sandbox-commons/data/lease/lease.js";
-import { SandboxAccountSchema } from "@amzn/innovation-sandbox-commons/data/sandbox-account/sandbox-account.js";
+import { PersistedSandboxAccountSchema } from "@amzn/innovation-sandbox-commons/data/sandbox-account/sandbox-account.js";
 import { InnovationSandbox } from "@amzn/innovation-sandbox-commons/innovation-sandbox.js";
 import { generateSchemaData } from "@amzn/innovation-sandbox-commons/test/generate-schema-data.js";
+import { mockGlobalConfig } from "@amzn/innovation-sandbox-commons/test/lambdas/fixtures.js";
 import {
   mockedAccountStore,
+  mockedBlueprintDeploymentService,
+  mockedBlueprintStore,
   mockedIdcService,
   mockedIsbEventBridge,
   mockedLeaseStore,
+  mockedOrganizationsTaggingService,
   mockedOrgsService,
 } from "@amzn/innovation-sandbox-commons/test/mocking/common-mocks.js";
 import { createMockOf } from "@amzn/innovation-sandbox-commons/test/mocking/mock-utils.js";
+import { ISB_ACCOUNT_TAG_SUFFIXES } from "@amzn/innovation-sandbox-commons/utils/isb-account-tags.js";
 import {
-  IsbUser,
-  IsbUserSchema,
-} from "@amzn/innovation-sandbox-commons/types/isb-types.js";
+  type IdcIdentity,
+  IdcIdentitySchema,
+} from "@amzn/innovation-sandbox-shared/utils/auth-utils.js";
 import { Logger } from "@aws-lambda-powertools/logger";
 import { Tracer } from "@aws-lambda-powertools/tracer";
 import { DateTime } from "luxon";
@@ -34,9 +38,12 @@ function createMockContext() {
     eventBridgeClient: mockedIsbEventBridge(),
     idcService: mockedIdcService(),
     orgsService: mockedOrgsService(),
+    organizationsTaggingService: mockedOrganizationsTaggingService(),
+    blueprintStore: mockedBlueprintStore(),
+    blueprintDeploymentService: mockedBlueprintDeploymentService(),
     logger: createMockOf(Logger),
     tracer: new Tracer(),
-    globalConfig: generateSchemaData(GlobalConfigSchema),
+    globalConfig: mockGlobalConfig(),
   };
 }
 
@@ -46,11 +53,11 @@ const currentDateTime = DateTime.fromISO("2024-12-20T08:45:00.000Z", {
 
 describe("InnovationSandbox.ejectAccount()", () => {
   let mockContext: ReturnType<typeof createMockContext>;
-  let mockUser: IsbUser;
+  let mockUser: IdcIdentity;
 
   beforeEach(() => {
     mockContext = createMockContext();
-    mockUser = generateSchemaData(IsbUserSchema);
+    mockUser = generateSchemaData(IdcIdentitySchema);
 
     mockContext.idcService.getUserFromEmail.mockImplementation(
       async (email) => {
@@ -73,7 +80,7 @@ describe("InnovationSandbox.ejectAccount()", () => {
   });
 
   test("ejecting account from available", async () => {
-    const mockAccount = generateSchemaData(SandboxAccountSchema, {
+    const mockAccount = generateSchemaData(PersistedSandboxAccountSchema, {
       status: "Available",
     });
 
@@ -94,10 +101,10 @@ describe("InnovationSandbox.ejectAccount()", () => {
   });
 
   test("ejecting account that is part of an active lease", async () => {
-    const mockAccount = generateSchemaData(SandboxAccountSchema, {
+    const mockAccount = generateSchemaData(PersistedSandboxAccountSchema, {
       status: "Active",
     });
-    const activeLease = generateSchemaData(MonitoredLeaseSchema, {
+    const activeLease = generateSchemaData(PersistedMonitoredLeaseSchema, {
       awsAccountId: mockAccount.awsAccountId,
       status: "Active",
       userEmail: mockUser.email,
@@ -115,17 +122,13 @@ describe("InnovationSandbox.ejectAccount()", () => {
     mockContext.leaseStore.findByStatusAndAccountID.mockResolvedValue({
       result: [activeLease],
       nextPageIdentifier: null,
-    } as PaginatedQueryResult<MonitoredLease>);
+    } as PaginatedQueryResult<PersistedMonitoredLease>);
 
     await InnovationSandbox.ejectAccount(
       {
         sandboxAccount: mockAccount,
       },
       mockContext,
-    );
-
-    expect(mockContext.idcService.revokeAllUserAccess).toHaveBeenCalledWith(
-      mockAccount.awsAccountId,
     );
 
     expect(mockContext.idcService.revokeGroupAccess).toHaveBeenCalledWith(
@@ -143,6 +146,53 @@ describe("InnovationSandbox.ejectAccount()", () => {
         ...activeLease,
         status: "Ejected",
       }),
+    );
+
+    expect(
+      mockContext.orgsService.performAccountMoveAction,
+    ).toHaveBeenCalledWith(
+      mockAccount.awsAccountId,
+      mockAccount.status,
+      "Exit",
+    );
+  });
+
+  test("untags all 5 ISB keys before moving the account to Exit", async () => {
+    const mockAccount = generateSchemaData(PersistedSandboxAccountSchema, {
+      status: "Available",
+    });
+
+    await InnovationSandbox.ejectAccount(
+      { sandboxAccount: mockAccount },
+      mockContext,
+    );
+
+    expect(
+      mockContext.organizationsTaggingService.untagAccount,
+    ).toHaveBeenCalledWith(mockAccount.awsAccountId, [
+      ...ISB_ACCOUNT_TAG_SUFFIXES,
+    ]);
+
+    const untagOrder =
+      mockContext.organizationsTaggingService.untagAccount.mock
+        .invocationCallOrder[0]!;
+    const moveOrder =
+      mockContext.orgsService.performAccountMoveAction.mock
+        .invocationCallOrder[0]!;
+    expect(untagOrder).toBeLessThan(moveOrder);
+  });
+
+  test("untag failure does not block the ejection", async () => {
+    const mockAccount = generateSchemaData(PersistedSandboxAccountSchema, {
+      status: "Available",
+    });
+    mockContext.organizationsTaggingService.untagAccount.mockRejectedValue(
+      new Error("AccessDenied"),
+    );
+
+    await InnovationSandbox.ejectAccount(
+      { sandboxAccount: mockAccount },
+      mockContext,
     );
 
     expect(

@@ -2,25 +2,33 @@
 // SPDX-License-Identifier: Apache-2.0
 import z from "zod";
 
+import { PersistedMonitoredLease } from "@amzn/innovation-sandbox-commons/data/lease/lease.js";
+import { EventDetailTypes } from "@amzn/innovation-sandbox-commons/events/index.js";
+import { IsbEvent } from "@amzn/innovation-sandbox-commons/sdk-clients/event-bridge-client.js";
 import {
   AwsAccountIdSchema,
+  enumErrorMap,
   FreeTextSchema,
-} from "@amzn/innovation-sandbox-commons/data/common-schemas.js";
+} from "@amzn/innovation-sandbox-commons/utils/zod.js";
 import {
   ExpiredLeaseStatus,
   LeaseKeySchema,
-  MonitoredLease,
-} from "@amzn/innovation-sandbox-commons/data/lease/lease.js";
-import { EventDetailTypes } from "@amzn/innovation-sandbox-commons/events/index.js";
-import { IsbEvent } from "@amzn/innovation-sandbox-commons/sdk-clients/event-bridge-client.js";
+} from "@amzn/innovation-sandbox-shared/types/lease.js";
 
-export const LeaseTerminatedReasonTypeSchema = z.enum([
-  "Expired",
-  "BudgetExceeded",
-  "ManuallyTerminated",
-  "AccountQuarantined",
-  "Ejected",
-]);
+export const LeaseTerminatedReasonTypeSchema = z.enum(
+  [
+    "Expired",
+    "BudgetExceeded",
+    "ManuallyTerminated",
+    "UserTerminated",
+    "AccountQuarantined",
+    "Ejected",
+    "ProvisioningFailed",
+  ],
+  {
+    error: enumErrorMap,
+  },
+);
 
 export const LeaseTerminatedByDurationSchema = z.object({
   type: z.literal(LeaseTerminatedReasonTypeSchema.enum.Expired),
@@ -38,6 +46,11 @@ export const LeaseTerminatedManualSchema = z.object({
   comment: FreeTextSchema,
 });
 
+export const LeaseTerminatedByUserSchema = z.object({
+  type: z.literal(LeaseTerminatedReasonTypeSchema.enum.UserTerminated),
+  comment: FreeTextSchema,
+});
+
 export const LeaseTerminatedQuarantinedSchema = z.object({
   type: z.literal(LeaseTerminatedReasonTypeSchema.enum.AccountQuarantined),
   comment: FreeTextSchema,
@@ -48,12 +61,19 @@ export const LeaseTerminatedEjectedSchema = z.object({
   comment: FreeTextSchema,
 });
 
+export const LeaseTerminatedProvisioningFailedSchema = z.object({
+  type: z.literal(LeaseTerminatedReasonTypeSchema.enum.ProvisioningFailed),
+  comment: FreeTextSchema,
+});
+
 export const LeaseTerminatedReasonSchema = z.discriminatedUnion("type", [
   LeaseTerminatedByDurationSchema,
   LeaseTerminatedByBudgetSchema,
   LeaseTerminatedManualSchema,
+  LeaseTerminatedByUserSchema,
   LeaseTerminatedQuarantinedSchema,
   LeaseTerminatedEjectedSchema,
+  LeaseTerminatedProvisioningFailedSchema,
 ]);
 
 export type LeaseTerminatedReason = z.infer<typeof LeaseTerminatedReasonSchema>;
@@ -79,8 +99,7 @@ export class LeaseTerminatedEvent<
   T extends z.infer<typeof LeaseTerminatedReasonTypeSchema> = z.infer<
     typeof LeaseTerminatedReasonTypeSchema
   >,
-> implements IsbEvent
-{
+> implements IsbEvent {
   readonly DetailType = EventDetailTypes.LeaseTerminated;
   readonly Detail: z.infer<typeof LeaseTerminatedEventSchema> & {
     reason: { type: T };
@@ -107,7 +126,7 @@ export class LeaseTerminatedEvent<
 
 export function getLeaseTerminatedReason(
   expiredStatus: ExpiredLeaseStatus,
-  lease: MonitoredLease,
+  lease: PersistedMonitoredLease,
 ): LeaseTerminatedReason {
   switch (expiredStatus) {
     case "Expired":
@@ -131,6 +150,11 @@ export function getLeaseTerminatedReason(
         type: "ManuallyTerminated",
         comment: "Terminated by admin",
       };
+    case "UserTerminated":
+      return {
+        type: "UserTerminated",
+        comment: "Terminated by user",
+      };
     case "AccountQuarantined":
       return {
         type: "AccountQuarantined",
@@ -140,6 +164,11 @@ export function getLeaseTerminatedReason(
       return {
         type: "Ejected",
         comment: "Account ejected by admin",
+      };
+    case "ProvisioningFailed":
+      return {
+        type: "ProvisioningFailed",
+        comment: "Blueprint deployment failed",
       };
     default:
       throw new Error(`Unsupported expiration status.`);

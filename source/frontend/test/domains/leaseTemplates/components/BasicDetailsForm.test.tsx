@@ -1,179 +1,154 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { screen, waitFor } from "@testing-library/react";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { BrowserRouter as Router } from "react-router-dom";
-import { describe, expect, test, vi } from "vitest";
+import { FormProvider, useForm } from "react-hook-form";
+import { describe, expect, it } from "vitest";
 
-import { LeaseTemplate } from "@amzn/innovation-sandbox-commons/data/lease-template/lease-template";
-import { showErrorToast } from "@amzn/innovation-sandbox-frontend/components/Toast";
-import { BasicDetailsForm } from "@amzn/innovation-sandbox-frontend/domains/leaseTemplates/components/BasicDetailsForm";
-import { config } from "@amzn/innovation-sandbox-frontend/helpers/config";
-import { mockBasicLeaseTemplate } from "@amzn/innovation-sandbox-frontend/mocks/handlers/leaseTemplateHandlers";
-import { server } from "@amzn/innovation-sandbox-frontend/mocks/server";
-import { renderWithQueryClient } from "@amzn/innovation-sandbox-frontend/setupTests";
-import { http, HttpResponse } from "msw";
+import {
+  BasicDetailsForm,
+  BasicDetailsFormValues,
+} from "@amzn/innovation-sandbox-frontend/domains/leaseTemplates/components/BasicDetailsForm";
+import { BasicDetailsValidationSchema } from "@amzn/innovation-sandbox-frontend/domains/leaseTemplates/validation";
 
-const mockNavigate = vi.fn();
-vi.mock("react-router-dom", async () => {
-  const actual = await vi.importActual("react-router-dom");
-  return {
-    ...actual,
-    useNavigate: () => mockNavigate,
-  };
-});
+function TestWrapper({
+  leaseSharingEnabled = false,
+  defaultValues,
+}: {
+  leaseSharingEnabled?: boolean;
+  defaultValues?: Partial<BasicDetailsFormValues>;
+}) {
+  const methods = useForm<BasicDetailsFormValues>({
+    resolver: zodResolver(BasicDetailsValidationSchema),
+    mode: "all",
+    defaultValues: {
+      name: "",
+      description: "",
+      requiresApproval: true,
+      visibility: "PRIVATE",
+      allowOwnerToShareLease: false,
+      ...defaultValues,
+    },
+  });
 
-vi.mock("@amzn/innovation-sandbox-frontend/components/Toast", () => ({
-  showErrorToast: vi.fn(),
-}));
+  return (
+    <FormProvider {...methods}>
+      <BasicDetailsForm leaseSharingEnabled={leaseSharingEnabled} />
+    </FormProvider>
+  );
+}
 
 describe("BasicDetailsForm", () => {
-  const mockLeaseTemplate: LeaseTemplate = {
-    ...mockBasicLeaseTemplate,
-    visibility: "PUBLIC",
-  };
-  const renderComponent = () =>
-    renderWithQueryClient(
-      <Router>
-        <BasicDetailsForm leaseTemplate={mockLeaseTemplate} />
-      </Router>,
-    );
+  describe("allowOwnerToShareLease toggle", () => {
+    it("renders the toggle as disabled when leaseSharingEnabled is false", () => {
+      render(<TestWrapper leaseSharingEnabled={false} />);
 
-  test("renders the form with correct initial values", async () => {
-    renderComponent();
-
-    await waitFor(() => {
-      expect(screen.getByLabelText("Name")).toHaveValue(mockLeaseTemplate.name);
-      expect(screen.getByLabelText("Description")).toHaveValue(
-        mockLeaseTemplate.description,
-      );
-      expect(screen.getByLabelText("Approval required")).not.toBeChecked();
-      expect(screen.getByLabelText("Visibility")).toHaveTextContent(/Public/);
-    });
-  });
-
-  test("submits form with updated values", async () => {
-    const submitSpy = vi.fn();
-    server.use(
-      http.put(
-        `${config.ApiUrl}/leaseTemplates/:${mockLeaseTemplate.uuid}`,
-        async ({ request }) => {
-          const data = await request.json();
-          submitSpy(data);
-          return HttpResponse.json({ status: "success", data });
-        },
-      ),
-    );
-
-    renderComponent();
-    const user = userEvent.setup();
-
-    await user.clear(screen.getByLabelText("Name"));
-    await user.type(screen.getByLabelText("Name"), "Updated Template");
-    await user.clear(screen.getByLabelText("Description"));
-    await user.type(
-      screen.getByLabelText("Description"),
-      "Updated description",
-    );
-    const visibilitySelect = screen.getByLabelText("Visibility");
-    await user.click(visibilitySelect);
-    await waitFor(() => {
-      const publicOptions = screen.getAllByText(/Public/);
-      return user.click(publicOptions[0]);
-    });
-    await user.click(screen.getByLabelText("Approval required"));
-    await user.click(
-      screen.getByRole("button", { name: /update basic details/i }),
-    );
-
-    await waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalledWith("/lease_templates");
-      expect(submitSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          visibility: "PUBLIC",
-          name: "Updated Template",
-          description: "Updated description",
-          requiresApproval: true,
-        }),
-      );
-    });
-  });
-
-  test("displays warning when approval is not required", async () => {
-    renderComponent();
-
-    await waitFor(() => {
       expect(
-        screen.getByText(/When a user requests this lease template/i),
+        screen.getByText("Allow owner to share lease"),
+      ).toBeInTheDocument();
+
+      const toggle = screen.getByRole("checkbox", {
+        name: /sharing disabled/i,
+      });
+      expect(toggle).toBeDisabled();
+    });
+
+    it("shows globally disabled message when leaseSharingEnabled is false", () => {
+      render(<TestWrapper leaseSharingEnabled={false} />);
+
+      expect(
+        screen.getByText(/Lease sharing is globally disabled/i),
       ).toBeInTheDocument();
     });
-  });
 
-  test("cancels form submission and navigates back", async () => {
-    renderComponent();
-    const user = userEvent.setup();
+    it("renders the toggle as enabled when leaseSharingEnabled is true", () => {
+      render(<TestWrapper leaseSharingEnabled={true} />);
 
-    await user.click(screen.getByRole("button", { name: /cancel/i }));
-
-    expect(mockNavigate).toHaveBeenCalledWith("/lease_templates");
-  });
-
-  test("validates required fields before submission", async () => {
-    renderComponent();
-    const user = userEvent.setup();
-
-    await user.clear(screen.getByLabelText("Name"));
-    await user.click(
-      screen.getByRole("button", { name: /update basic details/i }),
-    );
-    await waitFor(() => {
       expect(
-        screen.getByText("Please enter a name for this lease template"),
+        screen.getByText("Allow owner to share lease"),
+      ).toBeInTheDocument();
+
+      const toggle = screen.getByRole("checkbox", {
+        name: /sharing disabled/i,
+      });
+      expect(toggle).not.toBeDisabled();
+    });
+
+    it("shows the normal description when leaseSharingEnabled is true", () => {
+      render(<TestWrapper leaseSharingEnabled={true} />);
+
+      expect(
+        screen.getByText(
+          /the lease owner can share sandbox access with additional users and groups/i,
+        ),
       ).toBeInTheDocument();
     });
-  });
 
-  test("toggles approval required switch", async () => {
-    renderComponent();
-    const user = userEvent.setup();
-    const approvalSwitch = screen.getByLabelText("Approval required");
-
-    expect(approvalSwitch).not.toBeChecked();
-    await user.click(approvalSwitch);
-    expect(approvalSwitch).toBeChecked();
-    await user.click(approvalSwitch);
-    expect(approvalSwitch).not.toBeChecked();
-  });
-
-  test("handles API error on form submission", async () => {
-    server.use(
-      http.put(
-        `${config.ApiUrl}/leaseTemplates/:${mockLeaseTemplate.uuid}`,
-        () => {
-          return HttpResponse.json(
-            { status: "error", message: "API Error" },
-            { status: 500 },
-          );
-        },
-      ),
-    );
-
-    renderComponent();
-    const user = userEvent.setup();
-
-    await user.clear(screen.getByLabelText("Name"));
-    await user.type(screen.getByLabelText("Name"), "Updated Template");
-
-    const submitButton = screen.getByRole("button", {
-      name: /update basic details/i,
-    });
-    await user.click(submitButton);
-    await waitFor(() => {
-      expect(showErrorToast).toHaveBeenCalledWith(
-        "HTTP error 500",
-        "Whoops, something went wrong!",
+    it("displays 'Sharing enabled' when toggle value is true", () => {
+      render(
+        <TestWrapper
+          leaseSharingEnabled={true}
+          defaultValues={{ allowOwnerToShareLease: true }}
+        />,
       );
+
+      expect(screen.getByText("Sharing enabled")).toBeInTheDocument();
+    });
+
+    it("toggles from disabled to enabled on user click", async () => {
+      const user = userEvent.setup();
+      render(<TestWrapper leaseSharingEnabled={true} />);
+
+      expect(screen.getByText("Sharing disabled")).toBeInTheDocument();
+
+      const toggle = screen.getByRole("checkbox", {
+        name: /sharing disabled/i,
+      });
+      await user.click(toggle);
+
+      expect(screen.getByText("Sharing enabled")).toBeInTheDocument();
+    });
+
+    it("cannot be toggled when leaseSharingEnabled is false", async () => {
+      const user = userEvent.setup();
+      render(<TestWrapper leaseSharingEnabled={false} />);
+
+      const toggle = screen.getByRole("checkbox", {
+        name: /sharing disabled/i,
+      });
+      await user.click(toggle);
+
+      // Should remain disabled — click has no effect
+      expect(screen.getByText("Sharing disabled")).toBeInTheDocument();
+    });
+
+    it("preserves existing true value when globally disabled (edit scenario)", () => {
+      render(
+        <TestWrapper
+          leaseSharingEnabled={false}
+          defaultValues={{ allowOwnerToShareLease: true }}
+        />,
+      );
+
+      // Toggle shows as checked (preserving the stored value) but disabled
+      const toggle = screen.getByRole("checkbox", {
+        name: /sharing enabled/i,
+      });
+      expect(toggle).toBeDisabled();
+      expect(toggle).toBeChecked();
+    });
+  });
+
+  describe("existing fields", () => {
+    it("renders name, description, requiresApproval, and visibility fields", () => {
+      render(<TestWrapper leaseSharingEnabled={false} />);
+
+      expect(screen.getByLabelText("Name")).toBeInTheDocument();
+      expect(screen.getByLabelText(/Description/i)).toBeInTheDocument();
+      expect(screen.getByText("Requires Approval")).toBeInTheDocument();
+      expect(screen.getByLabelText("Visibility")).toBeInTheDocument();
     });
   });
 });

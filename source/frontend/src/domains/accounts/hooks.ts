@@ -1,57 +1,221 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { useEffect, useMemo, useRef } from "react";
 
-import { AccountService } from "@amzn/innovation-sandbox-frontend/domains/accounts/service";
+import { getAccountService } from "@amzn/innovation-sandbox-frontend/domains/accounts/service";
+import { CleanupReportView } from "@amzn/innovation-sandbox-frontend/domains/accounts/types";
 
 export const useGetAccounts = () => {
   return useQuery({
     queryKey: ["accounts"],
-    queryFn: async () => await new AccountService().getAccounts(),
+    queryFn: async () => await getAccountService().getAccounts(),
   });
+};
+
+export const useGetAccountById = (accountId: string | undefined) => {
+  return useQuery({
+    queryKey: ["accounts", accountId],
+    queryFn: async () => await getAccountService().getAccountById(accountId!),
+    enabled: !!accountId,
+    // Poll only while a cleanup is actively in flight
+    refetchInterval: (query) =>
+      query.state.data?.activeCleanup ? 10_000 : false,
+  });
+};
+
+export const useGetCleanupReports = (accountId: string | undefined) => {
+  const queryClient = useQueryClient();
+  const prevFingerprintRef = useRef<string | undefined>(undefined);
+
+  // Full paginated list
+  const listQuery = useInfiniteQuery({
+    queryKey: ["accounts", accountId, "cleanup-reports"],
+    queryFn: async ({ pageParam }) =>
+      await getAccountService().getCleanupReports(accountId!, pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextPageIdentifier ?? undefined,
+    enabled: !!accountId,
+  });
+
+  // Lightweight probe — polls every 10s for live step-level updates
+  const latestQuery = useQuery({
+    queryKey: ["accounts", accountId, "cleanup-report-latest"],
+    queryFn: async () =>
+      await getAccountService().getLatestCleanupReport(accountId!),
+    enabled: !!accountId,
+    refetchInterval: 10_000,
+  });
+
+  // Invalidate the full list when a new report appears
+  useEffect(() => {
+    const currentStartedAt = latestQuery.data?.startedAt;
+
+    if (
+      prevFingerprintRef.current !== undefined &&
+      currentStartedAt !== prevFingerprintRef.current
+    ) {
+      queryClient.invalidateQueries({
+        queryKey: ["accounts", accountId, "cleanup-reports"],
+      });
+    }
+    prevFingerprintRef.current = currentStartedAt;
+  }, [latestQuery.data, accountId, queryClient]);
+
+  // Invalidate account details when cleanup report status changes
+  // so the account status header stays in sync
+  const prevStatusRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const currentStatus = latestQuery.data?.status;
+
+    if (
+      prevStatusRef.current !== undefined &&
+      currentStatus !== prevStatusRef.current
+    ) {
+      queryClient.invalidateQueries({
+        queryKey: ["accounts", accountId],
+        exact: true,
+      });
+    }
+    prevStatusRef.current = currentStatus;
+  }, [latestQuery.data?.status, accountId, queryClient]);
+
+  // Merge: replace reports[0] with the fresher polled version so
+  // consumers always see the most up-to-date data in a single array.
+  const reports = useMemo(() => {
+    const listReports: CleanupReportView[] =
+      listQuery.data?.pages.flatMap((page) => page.result) ?? [];
+    if (
+      latestQuery.data &&
+      listReports.length > 0 &&
+      latestQuery.data.startedAt === listReports[0].startedAt
+    ) {
+      return [latestQuery.data, ...listReports.slice(1)];
+    }
+    return listReports;
+  }, [listQuery.data, latestQuery.data]);
+
+  return {
+    reports,
+    isLoading: listQuery.isLoading,
+    isError: listQuery.isError,
+    hasNextPage: listQuery.hasNextPage ?? false,
+    fetchNextPage: listQuery.fetchNextPage,
+    isFetchingNextPage: listQuery.isFetchingNextPage,
+    refetch: listQuery.refetch,
+  };
 };
 
 export const useGetUnregisteredAccounts = () => {
   return useQuery({
     queryKey: ["unregisteredAccounts"],
-    queryFn: async () => await new AccountService().getUnregisteredAccounts(),
+    queryFn: async () => await getAccountService().getUnregisteredAccounts(),
   });
 };
 
-export const useAddAccount = () => {
+export const useAddAccount = (options?: { skipInvalidation?: boolean }) => {
   const client = useQueryClient();
   return useMutation({
     mutationFn: async (awsAccountId: string) =>
-      await new AccountService().addAccount(awsAccountId),
+      await getAccountService().addAccount(awsAccountId),
     onSuccess: () => {
-      client.invalidateQueries({ queryKey: ["accounts"], refetchType: "all" });
+      // Only invalidate if skipInvalidation is not set
+      if (!options?.skipInvalidation) {
+        client.invalidateQueries({
+          queryKey: ["accounts"],
+          refetchType: "all",
+        });
+        client.invalidateQueries({
+          queryKey: ["unregisteredAccounts"],
+          refetchType: "all",
+        });
+      }
+    },
+  });
+};
+
+export const useEjectAccount = (options?: { skipInvalidation?: boolean }) => {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (awsAccountId: string) =>
+      await getAccountService().ejectAccount(awsAccountId),
+    onSuccess: () => {
+      // Only invalidate if skipInvalidation is not set
+      if (!options?.skipInvalidation) {
+        client.invalidateQueries({
+          queryKey: ["accounts"],
+          refetchType: "all",
+        });
+        client.invalidateQueries({ queryKey: ["leases"], refetchType: "all" });
+      }
+    },
+  });
+};
+
+export const useCleanupAccount = (options?: { skipInvalidation?: boolean }) => {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (awsAccountId: string) =>
+      await getAccountService().cleanupAccount(awsAccountId),
+    onSuccess: () => {
+      // Only invalidate if skipInvalidation is not set
+      if (!options?.skipInvalidation) {
+        client.invalidateQueries({
+          queryKey: ["accounts"],
+          refetchType: "all",
+        });
+      }
+    },
+  });
+};
+
+export const useQuarantineAccount = (options?: {
+  skipInvalidation?: boolean;
+}) => {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (awsAccountId: string) =>
+      await getAccountService().quarantineAccount(awsAccountId),
+    onSuccess: () => {
+      if (!options?.skipInvalidation) {
+        client.invalidateQueries({
+          queryKey: ["accounts"],
+          refetchType: "all",
+        });
+        client.invalidateQueries({ queryKey: ["leases"], refetchType: "all" });
+      }
+    },
+  });
+};
+
+export const useSkipCooldown = (accountId: string | undefined) => {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      if (!accountId) throw new Error("Account ID is required");
+      await getAccountService().skipCooldown(accountId);
+    },
+    onSuccess: () => {
       client.invalidateQueries({
-        queryKey: ["unregisteredAccounts"],
-        refetchType: "all",
+        queryKey: ["accounts", accountId, "cleanup-reports"],
+      });
+      client.invalidateQueries({
+        queryKey: ["accounts", accountId, "cleanup-report-latest"],
+      });
+      client.invalidateQueries({
+        queryKey: ["accounts", accountId],
+        exact: true,
+      });
+      client.invalidateQueries({
+        queryKey: ["accounts"],
+        exact: true,
       });
     },
-  });
-};
-
-export const useEjectAccount = () => {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: async (awsAccountId: string) =>
-      await new AccountService().ejectAccount(awsAccountId),
-    onSuccess: () => {
-      client.invalidateQueries({ queryKey: ["accounts"], refetchType: "all" });
-      client.invalidateQueries({ queryKey: ["leases"], refetchType: "all" });
-    },
-  });
-};
-
-export const useCleanupAccount = () => {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: async (awsAccountId: string) =>
-      await new AccountService().cleanupAccount(awsAccountId),
-    onSuccess: () =>
-      client.invalidateQueries({ queryKey: ["accounts"], refetchType: "all" }),
   });
 };

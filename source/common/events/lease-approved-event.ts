@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 import { z } from "zod";
 
-import { ApprovedBySchema } from "@amzn/innovation-sandbox-commons/data/lease/lease.js";
 import { EventDetailTypes } from "@amzn/innovation-sandbox-commons/events/index.js";
 import { IsbEvent } from "@amzn/innovation-sandbox-commons/sdk-clients/event-bridge-client.js";
+import { ApprovedBySchema } from "@amzn/innovation-sandbox-shared/types/lease.js";
 
 export const LeaseApprovedEventSchema = z.object({
   leaseId: z.string(),
   approvedBy: ApprovedBySchema,
-  userEmail: z.string().email(),
+  userEmail: z.email(),
 });
 
 export class LeaseApprovedEvent implements IsbEvent {

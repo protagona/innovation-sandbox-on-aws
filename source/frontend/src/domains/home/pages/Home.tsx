@@ -1,23 +1,19 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import {
-  Button,
-  ContentLayout,
-  Header,
-  SpaceBetween,
-} from "@cloudscape-design/components";
+import { Button, Header, SpaceBetween } from "@cloudscape-design/components";
 import { useNavigate } from "react-router-dom";
 
+import { useAppLayoutContext } from "@amzn/innovation-sandbox-frontend/components/AppLayout/AppLayoutContext";
+import { ContentLayout } from "@amzn/innovation-sandbox-frontend/components/ContentLayout";
 import { Divider } from "@amzn/innovation-sandbox-frontend/components/Divider";
 import { InfoLink } from "@amzn/innovation-sandbox-frontend/components/InfoLink";
 import { Markdown } from "@amzn/innovation-sandbox-frontend/components/Markdown";
 import { AccountsPanel } from "@amzn/innovation-sandbox-frontend/domains/home/components/AccountsPanel";
+import { ActiveLeases } from "@amzn/innovation-sandbox-frontend/domains/home/components/ActiveLeases";
 import { ApprovalsPanel } from "@amzn/innovation-sandbox-frontend/domains/home/components/ApprovalsPanel";
-import { MyLeases } from "@amzn/innovation-sandbox-frontend/domains/home/components/MyLeases";
 import { useBreadcrumb } from "@amzn/innovation-sandbox-frontend/hooks/useBreadcrumb";
 import { useUser } from "@amzn/innovation-sandbox-frontend/hooks/useUser";
-import { useAppLayoutContext } from "@aws-northstar/ui/components/AppLayout";
 import { useEffect } from "react";
 
 export const Home = () => {
@@ -40,7 +36,7 @@ export const Home = () => {
           <Divider />
           <AccountsPanel />
           <Divider />
-          <MyLeases />
+          <ActiveLeases />
         </SpaceBetween>
       );
     }
@@ -51,7 +47,7 @@ export const Home = () => {
           <Divider />
           <ApprovalsPanel />
           <Divider />
-          <MyLeases />
+          <ActiveLeases />
         </SpaceBetween>
       );
     }
@@ -59,7 +55,7 @@ export const Home = () => {
     return (
       <SpaceBetween size="m">
         <Divider />
-        <MyLeases />
+        <ActiveLeases />
       </SpaceBetween>
     );
   };
@@ -71,11 +67,11 @@ export const Home = () => {
           variant="h1"
           actions={
             <SpaceBetween direction="horizontal" size="xs">
-              <Button onClick={() => navigate("/request")} variant="primary">
+              <Button onClick={() => navigate("/request")}>
                 Request lease
               </Button>
               {(isAdmin || isManager) && (
-                <Button onClick={() => navigate("/assign")} variant="normal">
+                <Button onClick={() => navigate("/assign")}>
                   Assign lease
                 </Button>
               )}

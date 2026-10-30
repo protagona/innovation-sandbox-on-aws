@@ -1,18 +1,36 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
+import { GlobalConfig } from "@amzn/innovation-sandbox-commons/data/global-config/global-config.js";
+import {
+  IdentityTokenError,
+  readIdentityHeader,
+  verifyAndExtractClaims,
+} from "@amzn/innovation-sandbox-commons/lambda/auth/identity-token-verifier.js";
+import { BaseApiLambdaEnvironment } from "@amzn/innovation-sandbox-commons/lambda/environments/base-api-lambda-environment.js";
 import {
   BaseMiddlewareBundleOptions,
   IsbLambdaContext,
 } from "@amzn/innovation-sandbox-commons/lambda/middleware/base-middleware-bundle.js";
 import environmentValidatorMiddleware from "@amzn/innovation-sandbox-commons/lambda/middleware/environment-validator.js";
-import { httpErrorHandler } from "@amzn/innovation-sandbox-commons/lambda/middleware/http-error-handler.js";
+import {
+  createHttpJSendError,
+  httpErrorHandler,
+} from "@amzn/innovation-sandbox-commons/lambda/middleware/http-error-handler.js";
 import { httpUrlencodeQueryParser } from "@amzn/innovation-sandbox-commons/lambda/middleware/http-urlencode-query-parser.js";
 import { injectSanitizedLambdaContext } from "@amzn/innovation-sandbox-commons/lambda/middleware/inject-sanitized-lambda-context.js";
+import { isbConfigMiddleware } from "@amzn/innovation-sandbox-commons/lambda/middleware/isb-config-middleware.js";
+import { rbacAuthorizer } from "@amzn/innovation-sandbox-commons/lambda/middleware/rbac-authorizer.js";
+import { JSendResponse } from "@amzn/innovation-sandbox-commons/types/isb-types.js";
+import { parseM2mAssumedRoleArn } from "@amzn/innovation-sandbox-commons/utils/m2m-role-arn.js";
 import {
-  IsbUser,
-  JSendResponse,
-} from "@amzn/innovation-sandbox-commons/types/isb-types.js";
-import { decodeJwt } from "@amzn/innovation-sandbox-commons/utils/jwt.js";
+  type IsbUser,
+  COGNITO_IDC_USER_ID_CLAIM,
+  COGNITO_ISB_ROLES_CLAIM,
+  getUserEmail,
+  m2mRoleTierToRoles,
+  parseRolesClaim,
+  resolveEmailFromClaims,
+} from "@amzn/innovation-sandbox-shared/utils/auth-utils.js";
 import { MiddlewareFn } from "@aws-lambda-powertools/commons/types";
 import { Logger } from "@aws-lambda-powertools/logger";
 import { captureLambdaHandler } from "@aws-lambda-powertools/tracer/middleware";
@@ -30,35 +48,37 @@ import {
   APIGatewayProxyResult,
   APIGatewayRequestAuthorizerEvent,
 } from "aws-lambda";
-import createHttpError from "http-errors";
-import { Schema, z } from "zod";
+import { z } from "zod";
 
-type ApiMiddlewareBundleOptions<T extends Schema> = Omit<
+export type BaseApiLambdaSchema = z.ZodType<BaseApiLambdaEnvironment>;
+
+type ApiMiddlewareBundleOptions<T extends BaseApiLambdaSchema> = Omit<
   BaseMiddlewareBundleOptions<T>,
   "moduleName"
 >;
 
 export type IsbApiEvent = NormalizedHeadersEvent & NormalizedEvent;
 
-export type IsbApiContext<T> = IsbLambdaContext<T> &
-  APIGatewayEventRequestContextWithAuthorizer<APIGatewayRequestAuthorizerEvent> & {
-    user: IsbUser;
-  };
+export type IsbApiContext<T extends BaseApiLambdaEnvironment> =
+  IsbLambdaContext<T> &
+    APIGatewayEventRequestContextWithAuthorizer<APIGatewayRequestAuthorizerEvent> & {
+      user: IsbUser;
+      globalConfig: GlobalConfig;
+    };
 
-export default function apiMiddlewareBundle<T extends Schema>(
+export default function apiMiddlewareBundle<T extends BaseApiLambdaSchema>(
   opts: ApiMiddlewareBundleOptions<T>,
 ): middy.MiddyfiedHandler<IsbApiEvent, any, Error, IsbApiContext<z.infer<T>>> {
   const { logger, tracer, environmentSchema: schema } = opts;
-  logger.resetKeys(); // remove any keys that were added at module load time to avoid different behavior between cold and warm lambda starts
+  // remove any keys that were added at module load time to avoid different behavior between cold and warm lambda starts
+  logger.resetKeys();
 
   return middy()
-    .use(environmentValidatorMiddleware<z.infer<T>>({ schema, logger }))
+    .use(environmentValidatorMiddleware({ schema, logger }))
     .use(httpHeaderNormalizer())
     .use(httpEventNormalizer())
     .use(httpUrlencodeQueryParser())
     .use(httpSecurityHeaders())
-    .use(captureIsbUser())
-    .use(captureAPIRequestLogFields(logger))
     .use(
       httpErrorHandler({
         fallbackMessage: JSON.stringify({
@@ -70,37 +90,128 @@ export default function apiMiddlewareBundle<T extends Schema>(
         },
       }),
     )
+    .use(captureIsbUser())
+    .use(isbConfigMiddleware())
+    .use(rbacAuthorizer())
+    .use(captureAPIRequestLogFields(logger))
     .use(injectSanitizedLambdaContext(logger))
-    .use(captureLambdaHandler(tracer));
+    .use(captureLambdaHandler(tracer, { captureResponse: false }));
 }
 
-function captureIsbUser<T extends Schema>(): MiddlewareObj<
+// Shape of the Cognito ID-token claims relevant to the user-path. The
+// verifier returns Record<string, unknown> from JWKS validation; this schema
+// narrows the fields we read into typed values without scattered `typeof`
+// guards. resolveEmailFromClaims still runs separately because it can pull
+// from `cognito:username` when `email` is absent.
+const UserClaimsSchema = z.object({
+  [COGNITO_IDC_USER_ID_CLAIM]: z.string(),
+  [COGNITO_ISB_ROLES_CLAIM]: z.string(),
+});
+
+function captureIsbUser<T extends BaseApiLambdaEnvironment>(): MiddlewareObj<
   APIGatewayProxyEvent,
   any,
   Error,
   IsbApiContext<T>
 > {
-  const captureIsbUserBefore: MiddlewareFn<APIGatewayProxyEvent> = (
-    request,
-  ) => {
-    const authorizationHeader = request.event.headers.authorization;
-    if (!authorizationHeader) {
-      throw new createHttpError.BadRequest(
-        "Authorization header is missing from the request.",
-      );
+  const captureIsbUserBefore: MiddlewareFn<
+    APIGatewayProxyEvent,
+    any,
+    Error,
+    IsbApiContext<T>
+  > = async (request) => {
+    const env = request.context.env;
+    const userArn =
+      request.event.requestContext?.identity?.userArn ?? undefined;
+
+    // Decide auth path from the IAM principal first, NOT from header presence.
+    // Driving path selection from header presence opens a privilege-escalation
+    // primitive where an M2M caller attaches a victim's ID token and inherits
+    // their roles.
+    const m2m = parseM2mAssumedRoleArn(userArn, env.ISB_NAMESPACE);
+
+    if (m2m) {
+      // Hybrid request guard: M2M IAM principals must NOT carry x-isb-identity.
+      if (readIdentityHeader(request.event)) {
+        throw createHttpJSendError({
+          statusCode: 400,
+          errorType: "ValidationError",
+          data: {
+            errors: [
+              {
+                message:
+                  "x-isb-identity header is not permitted on M2M requests.",
+              },
+            ],
+          },
+        });
+      }
+
+      const roles = m2mRoleTierToRoles(m2m.roleTier);
+      if (roles.length === 0) {
+        throw createHttpJSendError({
+          statusCode: 403,
+          errorType: "AccessDeniedError",
+          data: { errors: [{ message: "No valid ISB role on M2M caller." }] },
+        });
+      }
+      const m2mUser: IsbUser = {
+        type: "m2m",
+        clientId: m2m.clientName,
+        roles,
+      };
+      Object.assign(request.context, { user: m2mUser });
+      return;
     }
-    const token = authorizationHeader.split(" ")[1];
-    if (!token) {
-      throw new createHttpError.BadRequest(
-        "token is missing from the Authorization header.",
-      );
+
+    // User path: verify the x-isb-identity ID token via JWKS.
+    const claims = await verifyAndExtractClaims(request.event, env).catch(
+      (err: unknown) => {
+        if (err instanceof IdentityTokenError) {
+          throw createHttpJSendError({
+            statusCode: err.kind === "SubMismatch" ? 403 : 401,
+            errorType:
+              err.kind === "SubMismatch"
+                ? "AccessDeniedError"
+                : "UnauthenticatedError",
+            data: { errors: [{ message: err.message }] },
+          });
+        }
+        throw err;
+      },
+    );
+
+    const email = resolveEmailFromClaims(claims);
+    const parsedClaims = UserClaimsSchema.safeParse(claims);
+    if (!email || !parsedClaims.success) {
+      throw createHttpJSendError({
+        statusCode: 401,
+        errorType: "UnauthenticatedError",
+        data: {
+          errors: [
+            {
+              message:
+                "Token is missing required claims. Please re-authenticate.",
+            },
+          ],
+        },
+      });
     }
-    const user: IsbUser | null = decodeJwt(token);
-    if (user === null) {
-      throw new createHttpError.BadRequest(
-        "Unable to capture the UserEmail from the Authorization token.",
-      );
+
+    const roles = parseRolesClaim(parsedClaims.data[COGNITO_ISB_ROLES_CLAIM]);
+    if (roles.length === 0) {
+      throw createHttpJSendError({
+        statusCode: 403,
+        errorType: "AccessDeniedError",
+        data: { errors: [{ message: "No valid ISB role on user token." }] },
+      });
     }
+    const user: IsbUser = {
+      type: "user",
+      email,
+      userId: parsedClaims.data[COGNITO_IDC_USER_ID_CLAIM],
+      roles,
+    };
     Object.assign(request.context, { user });
   };
 
@@ -109,7 +220,7 @@ function captureIsbUser<T extends Schema>(): MiddlewareObj<
   };
 }
 
-function captureAPIRequestLogFields<T extends Schema>(
+function captureAPIRequestLogFields<T extends BaseApiLambdaEnvironment>(
   logger: Logger,
 ): MiddlewareObj<
   APIGatewayProxyEvent,
@@ -124,15 +235,15 @@ function captureAPIRequestLogFields<T extends Schema>(
     IsbApiContext<T>
   > = async (request): Promise<void> => {
     const { event } = request;
-
-    const { email, roles } = request.context.user;
+    const { user } = request.context;
 
     logger.appendKeys({
       path: event.path,
       httpMethod: event.httpMethod,
       requestId: event.requestContext.extendedRequestId,
-      user: email,
-      userGroups: roles,
+      user: getUserEmail(user),
+      userGroups: user.roles,
+      authType: user.type,
     });
   };
 

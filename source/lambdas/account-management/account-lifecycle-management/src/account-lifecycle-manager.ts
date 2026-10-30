@@ -4,13 +4,11 @@ import { Logger } from "@aws-lambda-powertools/logger";
 import { Tracer } from "@aws-lambda-powertools/tracer";
 import { SQSEvent } from "aws-lambda";
 
-import {
-  isActiveLease,
-  isMonitoredLease,
-} from "@amzn/innovation-sandbox-commons/data/lease/lease.js";
 import { AccountCleanupFailureEvent } from "@amzn/innovation-sandbox-commons/events/account-cleanup-failure-event.js";
 import { AccountCleanupSuccessfulEvent } from "@amzn/innovation-sandbox-commons/events/account-cleanup-successful-event.js";
 import { AccountDriftDetectedAlert } from "@amzn/innovation-sandbox-commons/events/account-drift-detected-alert.js";
+import { BlueprintDeploymentFailedEvent } from "@amzn/innovation-sandbox-commons/events/blueprint-deployment-failed-event.js";
+import { BlueprintDeploymentSucceededEvent } from "@amzn/innovation-sandbox-commons/events/blueprint-deployment-succeeded-event.js";
 import { EventDetailTypes } from "@amzn/innovation-sandbox-commons/events/index.js";
 import { LeaseBudgetExceededAlert } from "@amzn/innovation-sandbox-commons/events/lease-budget-exceeded-alert.js";
 import { LeaseExpiredAlert } from "@amzn/innovation-sandbox-commons/events/lease-expired-alert.js";
@@ -28,13 +26,17 @@ import {
   ContextWithConfig,
   isbConfigMiddleware,
 } from "@amzn/innovation-sandbox-commons/lambda/middleware/isb-config-middleware.js";
-import { SubscribableLog } from "@amzn/innovation-sandbox-commons/observability/log-types.js";
+import { logTaggingFailure } from "@amzn/innovation-sandbox-commons/observability/logging.js";
 import { assertNever } from "@amzn/innovation-sandbox-commons/types/type-guards.js";
 import { AwsConsoleLink } from "@amzn/innovation-sandbox-commons/utils/aws-console-links.js";
 import {
   fromTemporaryIsbIdcCredentials,
   fromTemporaryIsbOrgManagementCredentials,
 } from "@amzn/innovation-sandbox-commons/utils/cross-account-roles.js";
+import {
+  isActiveLease,
+  isMonitoredLease,
+} from "@amzn/innovation-sandbox-shared/types/lease.js";
 import { DateTime } from "luxon";
 
 const serviceName = "AccountLifecycleManager";
@@ -50,6 +52,8 @@ export namespace AccountLifecycleManager {
     EventDetailTypes.AccountCleanupFailure,
     EventDetailTypes.AccountDriftDetected,
     EventDetailTypes.LeaseFreezingThresholdBreachedAlert,
+    EventDetailTypes.BlueprintDeploymentSucceeded,
+    EventDetailTypes.BlueprintDeploymentFailed,
   ];
 }
 
@@ -127,6 +131,18 @@ async function handleAccountLifeCycleEvent(
         context,
       );
       break;
+    case EventDetailTypes.BlueprintDeploymentSucceeded:
+      await handleBlueprintDeploymentSucceeded(
+        BlueprintDeploymentSucceededEvent.parse(isbAlert),
+        context,
+      );
+      break;
+    case EventDetailTypes.BlueprintDeploymentFailed:
+      await handleBlueprintDeploymentFailed(
+        BlueprintDeploymentFailedEvent.parse(isbAlert),
+        context,
+      );
+      break;
     default:
       assertNever(eventDetailType);
   }
@@ -164,17 +180,21 @@ async function handleLeaseBudgetExceeded(
     },
     {
       leaseStore,
-      idcService: IsbServices.idcService(
-        context.env,
-        fromTemporaryIsbIdcCredentials(context.env),
-      ),
       orgsService: IsbServices.orgsService(
+        context.env,
+        fromTemporaryIsbOrgManagementCredentials(context.env),
+      ),
+      organizationsTaggingService: IsbServices.organizationsTaggingService(
         context.env,
         fromTemporaryIsbOrgManagementCredentials(context.env),
       ),
       eventBridgeClient: IsbServices.isbEventBridge(context.env),
       sandboxAccountStore: IsbServices.sandboxAccountStore(context.env),
       globalConfig: context.globalConfig,
+      blueprintStore: IsbServices.blueprintStore(context.env),
+      blueprintDeploymentService: IsbServices.blueprintDeploymentService(
+        context.env,
+      ),
       logger,
       tracer,
     },
@@ -214,17 +234,21 @@ async function handleLeaseExpired(
     },
     {
       leaseStore,
-      idcService: IsbServices.idcService(
-        context.env,
-        fromTemporaryIsbIdcCredentials(context.env),
-      ),
       orgsService: IsbServices.orgsService(
+        context.env,
+        fromTemporaryIsbOrgManagementCredentials(context.env),
+      ),
+      organizationsTaggingService: IsbServices.organizationsTaggingService(
         context.env,
         fromTemporaryIsbOrgManagementCredentials(context.env),
       ),
       eventBridgeClient: IsbServices.isbEventBridge(context.env),
       sandboxAccountStore: IsbServices.sandboxAccountStore(context.env),
       globalConfig: context.globalConfig,
+      blueprintStore: IsbServices.blueprintStore(context.env),
+      blueprintDeploymentService: IsbServices.blueprintDeploymentService(
+        context.env,
+      ),
       logger,
       tracer,
     },
@@ -236,20 +260,17 @@ async function handleAccountCleanupSuccessful(
   context: AccountLifecycleManagerContext,
 ) {
   const minutesSinceCleanupStarted = minutesSinceStarted(event);
-  const stateMachineExecutionArn =
-    event.Detail.cleanupExecutionContext.stateMachineExecutionArn;
+  const executionArn = event.Detail.cleanupExecutionContext.executionArn;
 
   logger.info(
-    `Account cleanup succeeded for account (${event.Detail.accountId}) after ${minutesSinceCleanupStarted.toFixed(1)} minutes. CleanupExecutionId: ${event.Detail.cleanupExecutionContext.stateMachineExecutionArn}`,
+    `Account cleanup succeeded for account (${event.Detail.accountId}) after ${minutesSinceCleanupStarted.toFixed(1)} minutes. CleanupExecutionId: ${event.Detail.cleanupExecutionContext.executionArn}`,
     {
-      logDetailType: "AccountCleanupSuccess",
       accountId: event.Detail.accountId,
       durationMinutes: minutesSinceCleanupStarted,
-      stateMachineExecutionArn: stateMachineExecutionArn,
-      stateMachineExecutionURL: AwsConsoleLink.stateMachineExecution(
-        stateMachineExecutionArn,
-      ),
-    } satisfies SubscribableLog,
+      executionArn: executionArn,
+      executionURL: AwsConsoleLink.executionConsoleUrl(executionArn),
+      reason: event.Detail.reason,
+    },
   );
 
   const orgsService = IsbServices.orgsService(
@@ -257,6 +278,10 @@ async function handleAccountCleanupSuccessful(
     fromTemporaryIsbOrgManagementCredentials(context.env),
   );
   const sandboxAccountStore = IsbServices.sandboxAccountStore(context.env);
+  const organizationsTaggingService = IsbServices.organizationsTaggingService(
+    context.env,
+    fromTemporaryIsbOrgManagementCredentials(context.env),
+  );
   const cleanSandboxAccountResponse = await sandboxAccountStore.get(
     event.Detail.accountId,
   );
@@ -280,6 +305,17 @@ async function handleAccountCleanupSuccessful(
   await orgsService
     .transactionalMoveAccount(cleanSandboxAccount, "CleanUp", "Available")
     .complete();
+
+  await organizationsTaggingService
+    .updateStatusTag(cleanSandboxAccount.awsAccountId, "Available")
+    .catch((error) =>
+      logTaggingFailure(
+        logger,
+        cleanSandboxAccount.awsAccountId,
+        ["Status"],
+        error,
+      ),
+    );
 }
 
 async function handleAccountCleanupFailure(
@@ -287,20 +323,17 @@ async function handleAccountCleanupFailure(
   context: AccountLifecycleManagerContext,
 ) {
   const minutesSinceCleanupStarted = minutesSinceStarted(event);
-  const stateMachineExecutionArn =
-    event.Detail.cleanupExecutionContext.stateMachineExecutionArn;
+  const executionArn = event.Detail.cleanupExecutionContext.executionArn;
 
   logger.info(
-    `Account cleanup failed for account (${event.Detail.accountId}) after ${minutesSinceCleanupStarted.toFixed(1)} minutes. CleanupExecutionId: ${event.Detail.cleanupExecutionContext.stateMachineExecutionArn}`,
+    `Account cleanup failed for account (${event.Detail.accountId}) after ${minutesSinceCleanupStarted.toFixed(1)} minutes. CleanupExecutionId: ${event.Detail.cleanupExecutionContext.executionArn}`,
     {
-      logDetailType: "AccountCleanupFailure",
       accountId: event.Detail.accountId,
       durationMinutes: minutesSinceCleanupStarted,
-      stateMachineExecutionArn: stateMachineExecutionArn,
-      stateMachineExecutionURL: AwsConsoleLink.stateMachineExecution(
-        stateMachineExecutionArn,
-      ),
-    } satisfies SubscribableLog,
+      executionArn: executionArn,
+      executionURL: AwsConsoleLink.executionConsoleUrl(executionArn),
+      reason: event.Detail.reason,
+    },
   );
 
   await InnovationSandbox.quarantineAccount(
@@ -308,9 +341,14 @@ async function handleAccountCleanupFailure(
       accountId: event.Detail.accountId,
       reason: "Cleanup Failed",
       currentOu: "CleanUp",
+      reasonForQuarantine: "CLEANUP_FAILED",
     },
     {
       orgsService: IsbServices.orgsService(
+        context.env,
+        fromTemporaryIsbOrgManagementCredentials(context.env),
+      ),
+      organizationsTaggingService: IsbServices.organizationsTaggingService(
         context.env,
         fromTemporaryIsbOrgManagementCredentials(context.env),
       ),
@@ -322,6 +360,10 @@ async function handleAccountCleanupFailure(
         fromTemporaryIsbIdcCredentials(context.env),
       ),
       globalConfig: context.globalConfig,
+      blueprintStore: IsbServices.blueprintStore(context.env),
+      blueprintDeploymentService: IsbServices.blueprintDeploymentService(
+        context.env,
+      ),
       logger,
       tracer,
     },
@@ -347,9 +389,14 @@ async function handleAccountDrift(
       accountId: event.Detail.accountId,
       reason: `Drift Detected: {expectedOU: ${event.Detail.expectedOu}, actualOU: ${event.Detail.actualOu}}`,
       currentOu: event.Detail.actualOu,
+      reasonForQuarantine: "DRIFT",
     },
     {
       orgsService: IsbServices.orgsService(
+        context.env,
+        fromTemporaryIsbOrgManagementCredentials(context.env),
+      ),
+      organizationsTaggingService: IsbServices.organizationsTaggingService(
         context.env,
         fromTemporaryIsbOrgManagementCredentials(context.env),
       ),
@@ -361,6 +408,10 @@ async function handleAccountDrift(
         fromTemporaryIsbIdcCredentials(context.env),
       ),
       globalConfig: context.globalConfig,
+      blueprintStore: IsbServices.blueprintStore(context.env),
+      blueprintDeploymentService: IsbServices.blueprintDeploymentService(
+        context.env,
+      ),
       logger,
       tracer,
     },
@@ -399,11 +450,11 @@ async function handleLeaseFreezingAlert(
     },
     {
       leaseStore,
-      idcService: IsbServices.idcService(
-        context.env,
-        fromTemporaryIsbIdcCredentials(context.env),
-      ),
       orgsService: IsbServices.orgsService(
+        context.env,
+        fromTemporaryIsbOrgManagementCredentials(context.env),
+      ),
+      organizationsTaggingService: IsbServices.organizationsTaggingService(
         context.env,
         fromTemporaryIsbOrgManagementCredentials(context.env),
       ),
@@ -415,13 +466,169 @@ async function handleLeaseFreezingAlert(
   );
 }
 
+async function handleBlueprintDeploymentSucceeded(
+  event: BlueprintDeploymentSucceededEvent,
+  context: AccountLifecycleManagerContext,
+) {
+  const leaseStore = IsbServices.leaseStore(context.env);
+  const leaseResponse = await leaseStore.get(event.Detail.leaseId);
+  const lease = leaseResponse.result;
+
+  if (leaseResponse.error) {
+    logger.warn(
+      `Error retrieving lease ${event.Detail.leaseId}: ${leaseResponse.error}`,
+    );
+  }
+  if (!lease) {
+    throw new Error(`Lease not found: ${event.Detail.leaseId}.`);
+  }
+
+  if (!isMonitoredLease(lease)) {
+    throw new Error(
+      `BlueprintDeploymentSucceededEvent incorrectly raised for an inactive lease: ${event.Detail.leaseId}.`,
+    );
+  }
+
+  await InnovationSandbox.publishLease(
+    { lease },
+    {
+      leaseStore,
+      principalStore: IsbServices.principalStore(context.env),
+      idcService: IsbServices.idcService(
+        context.env,
+        fromTemporaryIsbIdcCredentials(context.env),
+      ),
+      organizationsTaggingService: IsbServices.organizationsTaggingService(
+        context.env,
+        fromTemporaryIsbOrgManagementCredentials(context.env),
+      ),
+      isbEventBridgeClient: IsbServices.isbEventBridge(context.env),
+      logger,
+      tracer,
+    },
+  );
+
+  logger.info(
+    `Blueprint deployment succeeded. Lease published for user ${lease.userEmail}`,
+    {
+      blueprintId: event.Detail.blueprintId,
+      leaseId: lease.uuid,
+      accountId: lease.awsAccountId,
+    },
+  );
+}
+
+async function handleBlueprintDeploymentFailed(
+  event: BlueprintDeploymentFailedEvent,
+  context: AccountLifecycleManagerContext,
+) {
+  logger.error("Processing BlueprintDeploymentFailedEvent", {
+    blueprintId: event.Detail.blueprintId,
+    leaseId: event.Detail.leaseId,
+    errorType: event.Detail.errorType,
+    errorMessage: event.Detail.errorMessage,
+  });
+
+  const leaseStore = IsbServices.leaseStore(context.env);
+  const leaseResponse = await leaseStore.get(event.Detail.leaseId);
+  const lease = leaseResponse.result;
+
+  if (leaseResponse.error) {
+    logger.warn(
+      `Error retrieving lease ${event.Detail.leaseId}: ${leaseResponse.error}`,
+    );
+  }
+  if (!lease) {
+    throw new Error(`Lease not found: ${event.Detail.leaseId}.`);
+  }
+
+  if (!isMonitoredLease(lease)) {
+    throw new Error(
+      `BlueprintDeploymentFailedEvent incorrectly raised for an inactive lease: ${event.Detail.leaseId}.`,
+    );
+  }
+
+  // CRITICAL: Different handling based on approval type
+  if (lease.approvedBy === "AUTO_APPROVED") {
+    // Path A: Auto-approved lease - terminate permanently
+    logger.info(
+      "Auto-approved lease failed blueprint deployment. Terminating lease.",
+      {
+        leaseId: lease.uuid,
+        blueprintId: event.Detail.blueprintId,
+      },
+    );
+
+    await InnovationSandbox.terminateLease(
+      {
+        lease,
+        expiredStatus: "ProvisioningFailed",
+      },
+      {
+        leaseStore,
+        orgsService: IsbServices.orgsService(
+          context.env,
+          fromTemporaryIsbOrgManagementCredentials(context.env),
+        ),
+        organizationsTaggingService: IsbServices.organizationsTaggingService(
+          context.env,
+          fromTemporaryIsbOrgManagementCredentials(context.env),
+        ),
+        eventBridgeClient: IsbServices.isbEventBridge(context.env),
+        sandboxAccountStore: IsbServices.sandboxAccountStore(context.env),
+        globalConfig: context.globalConfig,
+        blueprintStore: IsbServices.blueprintStore(context.env),
+        blueprintDeploymentService: IsbServices.blueprintDeploymentService(
+          context.env,
+        ),
+        logger,
+        tracer,
+      },
+    );
+  } else {
+    // Path B: Manual approval lease - reset for retry
+    logger.info(
+      "Manual approval lease failed blueprint deployment. Resetting lease to PendingApproval.",
+      {
+        leaseId: lease.uuid,
+        blueprintId: event.Detail.blueprintId,
+        approvedBy: lease.approvedBy,
+      },
+    );
+
+    // Use denormalized blueprint name from lease (populated during lease creation from template)
+    const blueprintName = lease.blueprintName || "Unknown Blueprint";
+
+    await InnovationSandbox.resetLease(
+      {
+        lease,
+        blueprintName,
+      },
+      {
+        leaseStore,
+        sandboxAccountStore: IsbServices.sandboxAccountStore(context.env),
+        orgsService: IsbServices.orgsService(
+          context.env,
+          fromTemporaryIsbOrgManagementCredentials(context.env),
+        ),
+        isbEventBridgeClient: IsbServices.isbEventBridge(context.env),
+        blueprintStore: IsbServices.blueprintStore(context.env),
+        blueprintDeploymentService: IsbServices.blueprintDeploymentService(
+          context.env,
+        ),
+        logger,
+        tracer,
+      },
+    );
+  }
+}
+
 function minutesSinceStarted(
   cleanupEvent: AccountCleanupFailureEvent | AccountCleanupSuccessfulEvent,
 ): number {
   try {
     const startTime = DateTime.fromISO(
-      cleanupEvent.Detail.cleanupExecutionContext
-        .stateMachineExecutionStartTime,
+      cleanupEvent.Detail.cleanupExecutionContext.executionStartTime,
     );
     const now = DateTime.now();
     const duration = now.diff(startTime);

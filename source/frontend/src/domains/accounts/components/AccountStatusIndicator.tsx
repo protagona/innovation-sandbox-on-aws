@@ -1,19 +1,27 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { SandboxAccountStatus } from "@amzn/innovation-sandbox-commons/data/sandbox-account/sandbox-account";
-import { getColor } from "@amzn/innovation-sandbox-frontend/components/AccountsSummary/helpers";
 import { Box, Icon, Popover } from "@cloudscape-design/components";
 import { colorChartsStatusHigh } from "@cloudscape-design/design-tokens";
-import moment from "moment";
+import { DateTime } from "luxon";
+
+import { getColor } from "@amzn/innovation-sandbox-frontend/components/AccountsSummary/helpers";
+import { getCleanupStatusConfig } from "@amzn/innovation-sandbox-frontend/domains/accounts/helpers";
+import {
+  ActiveCleanup,
+  SandboxAccountStatus,
+} from "@amzn/innovation-sandbox-shared/types/sandbox-account";
 
 interface AccountStatusIndicatorProps {
   status: SandboxAccountStatus;
-  lastCleanupStartTime: string;
+  activeCleanup?: ActiveCleanup;
+  /** @deprecated Use activeCleanup.startedAt instead */
+  lastCleanupStartTime?: string;
 }
 
 export const AccountStatusIndicator = ({
   status,
+  activeCleanup,
   lastCleanupStartTime,
 }: AccountStatusIndicatorProps) => {
   switch (status) {
@@ -39,12 +47,43 @@ export const AccountStatusIndicator = ({
       );
 
     case "CleanUp": {
-      const hoursElapsed = moment().diff(moment(lastCleanupStartTime), "hours");
+      const cleanupStartTime = activeCleanup?.startedAt ?? lastCleanupStartTime;
+
+      const cleanupLabel = activeCleanup
+        ? `Clean Up (${getCleanupStatusConfig(activeCleanup.status).label})`
+        : "Clean Up";
+
+      if (!cleanupStartTime) {
+        const color = getColor(status);
+        return (
+          <span style={{ color }}>
+            <Icon name="remove" /> {cleanupLabel}
+          </span>
+        );
+      }
+
+      const hoursElapsed = DateTime.now().diff(
+        DateTime.fromISO(cleanupStartTime),
+        "hours",
+      ).hours;
       const isStale = hoursElapsed >= 24;
-      const message = isStale
-        ? "The cleanup process may be stuck, please retry."
-        : "This account is being cleaned up and will be ready to use soon.";
-      const color = isStale ? colorChartsStatusHigh : getColor(status);
+
+      const isCoolingDown = activeCleanup?.status === "COOLING_DOWN";
+      let message: string;
+
+      if (isCoolingDown) {
+        message =
+          "Account is in post-cleanup cooldown to allow cost data to settle. " +
+          "View account details for the precise countdown.";
+      } else if (isStale) {
+        message = "The cleanup process may be stuck, please retry.";
+      } else {
+        message =
+          "This account is being cleaned up and will be ready to use soon.";
+      }
+
+      const color =
+        isStale && !isCoolingDown ? colorChartsStatusHigh : getColor(status);
 
       return (
         <Popover
@@ -55,7 +94,7 @@ export const AccountStatusIndicator = ({
             <div style={{ color }}>
               {message}
               <Box color={"inherit"} fontWeight={"heavy"}>
-                Cleanup initiated:{` ${moment(lastCleanupStartTime)}`}
+                Cleanup initiated:{` ${DateTime.fromISO(cleanupStartTime)}`}
               </Box>
             </div>
           }
@@ -65,7 +104,7 @@ export const AccountStatusIndicator = ({
               color,
             }}
           >
-            <Icon name="remove" /> Clean Up
+            <Icon name="remove" /> {cleanupLabel}
           </span>
         </Popover>
       );

@@ -1,33 +1,33 @@
 // Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 // SPDX-License-Identifier: Apache-2.0
-import { LambdaIntegration } from "aws-cdk-lib/aws-apigateway";
+import { IFunction } from "aws-cdk-lib/aws-lambda";
 import { Construct } from "constructs";
 import path from "path";
 
 import { LeaseTemplateLambdaEnvironmentSchema } from "@amzn/innovation-sandbox-commons/lambda/environments/lease-template-lambda-environment.js";
+import type { RestApiProps } from "@amzn/innovation-sandbox-infrastructure/components/api/rest-api-all";
+import { IsbApiLambdaFunction } from "@amzn/innovation-sandbox-infrastructure/components/isb-lambda-function";
+import { IsbKmsKeys } from "@amzn/innovation-sandbox-infrastructure/components/kms";
 import {
-  RestApi,
-  RestApiProps,
-} from "@amzn/innovation-sandbox-infrastructure/components/api/rest-api-all";
-import { addAppConfigExtensionLayer } from "@amzn/innovation-sandbox-infrastructure/components/config/app-config-lambda-extension";
-import { IsbLambdaFunction } from "@amzn/innovation-sandbox-infrastructure/components/isb-lambda-function";
-import {
-  AppConfigReadPolicyStatement,
+  grantIsbDbReadOnly,
   grantIsbDbReadWrite,
 } from "@amzn/innovation-sandbox-infrastructure/helpers/policy-generators";
 import { IsbComputeStack } from "@amzn/innovation-sandbox-infrastructure/isb-compute-stack";
 
 export class LeaseTemplatesApi {
-  constructor(restApi: RestApi, scope: Construct, props: RestApiProps) {
+  public readonly lambdaFunction: IFunction;
+
+  constructor(scope: Construct, props: RestApiProps) {
+    const { namespace } = props;
     const {
-      configApplicationId,
-      configEnvironmentId,
-      globalConfigConfigurationProfileId,
-      reportingConfigConfigurationProfileId,
+      configTableName,
       leaseTemplateTable,
+      blueprintTable,
+      cognitoUserPoolId,
+      cognitoAppClientId,
     } = IsbComputeStack.sharedSpokeConfig.data;
 
-    const leaseTemplatesLambdaFunction = new IsbLambdaFunction(
+    const leaseTemplatesLambdaFunction = new IsbApiLambdaFunction(
       scope,
       "LeaseTemplatesLambdaFunction",
       {
@@ -46,66 +46,34 @@ export class LeaseTemplatesApi {
           "lease-templates-handler.ts",
         ),
         handler: "handler",
-        namespace: props.namespace,
+        namespace: namespace,
         environment: {
-          APP_CONFIG_APPLICATION_ID: configApplicationId,
-          APP_CONFIG_ENVIRONMENT_ID: configEnvironmentId,
-          APP_CONFIG_PROFILE_ID: globalConfigConfigurationProfileId,
-          REPORTING_CONFIG_PROFILE_ID: reportingConfigConfigurationProfileId,
-          AWS_APPCONFIG_EXTENSION_PREFETCH_LIST: `/applications/${configApplicationId}/environments/${configEnvironmentId}/configurations/${globalConfigConfigurationProfileId},/applications/${configApplicationId}/environments/${configEnvironmentId}/configurations/${reportingConfigConfigurationProfileId}`,
+          CONFIG_TABLE_NAME: configTableName,
           LEASE_TEMPLATE_TABLE_NAME: leaseTemplateTable,
+          BLUEPRINT_TABLE_NAME: blueprintTable,
+          COGNITO_USER_POOL_ID: cognitoUserPoolId,
+          COGNITO_APP_CLIENT_ID: cognitoAppClientId,
+          ISB_NAMESPACE: namespace,
         },
-        bundling: {
-          externalModules: [
-            "@middy/core",
-            "@aws-lambda-powertools/logger",
-            "@aws-lambda-powertools/tracer",
-            "@aws-lambda-powertools/parser",
-          ],
-        },
-        logGroup: restApi.logGroup,
         envSchema: LeaseTemplateLambdaEnvironmentSchema,
       },
     );
+    this.lambdaFunction = leaseTemplatesLambdaFunction.lambdaFunction;
 
     grantIsbDbReadWrite(
       scope,
       leaseTemplatesLambdaFunction,
       leaseTemplateTable,
     );
-    addAppConfigExtensionLayer(leaseTemplatesLambdaFunction);
-
-    leaseTemplatesLambdaFunction.lambdaFunction.addToRolePolicy(
-      new AppConfigReadPolicyStatement(scope, {
-        configurations: [
-          {
-            applicationId: configApplicationId,
-            environmentId: configEnvironmentId,
-            configurationProfileId: globalConfigConfigurationProfileId,
-          },
-          {
-            applicationId: configApplicationId,
-            environmentId: configEnvironmentId,
-            configurationProfileId: reportingConfigConfigurationProfileId,
-          },
-        ],
-      }),
+    grantIsbDbReadOnly(
+      scope,
+      leaseTemplatesLambdaFunction,
+      configTableName,
+      blueprintTable,
     );
 
-    const leaseTemplatesResource = restApi.root.addResource("leaseTemplates", {
-      defaultIntegration: new LambdaIntegration(
-        leaseTemplatesLambdaFunction.lambdaFunction,
-        { allowTestInvoke: true, proxy: true },
-      ),
-    });
-    leaseTemplatesResource.addMethod("GET");
-    leaseTemplatesResource.addMethod("POST");
-
-    const leaseTemplateNameResource = leaseTemplatesResource.addResource(
-      "{leaseTemplateName}",
+    IsbKmsKeys.get(scope, namespace).grantEncryptDecrypt(
+      leaseTemplatesLambdaFunction.lambdaFunction,
     );
-    leaseTemplateNameResource.addMethod("GET");
-    leaseTemplateNameResource.addMethod("PUT");
-    leaseTemplateNameResource.addMethod("DELETE");
   }
 }

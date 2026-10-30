@@ -5,6 +5,7 @@ import {
   DynamoDBDocumentClient,
   GetCommand,
   PutCommand,
+  QueryCommand,
   ScanCommand,
 } from "@aws-sdk/lib-dynamodb";
 
@@ -24,13 +25,14 @@ import {
 } from "@amzn/innovation-sandbox-commons/data/errors.js";
 import { LeaseTemplateStore } from "@amzn/innovation-sandbox-commons/data/lease-template/lease-template-store.js";
 import {
-  LeaseTemplate,
-  LeaseTemplateSchema,
   LeaseTemplateSchemaVersion,
+  PersistedLeaseTemplate,
+  PersistedLeaseTemplateSchema,
 } from "@amzn/innovation-sandbox-commons/data/lease-template/lease-template.js";
 import {
   parseResults,
   parseSingleItemResult,
+  removeNullFieldsForDynamoDB,
   validateItem,
   withMetadata,
 } from "@amzn/innovation-sandbox-commons/data/utils.js";
@@ -49,14 +51,16 @@ export class DynamoLeaseTemplateStore extends LeaseTemplateStore {
     this.ddbClient = props.client;
   }
 
-  @validateItem(LeaseTemplateSchema)
+  @validateItem(PersistedLeaseTemplateSchema)
   @withMetadata(LeaseTemplateSchemaVersion)
-  public async create(leaseTemplate: LeaseTemplate): Promise<LeaseTemplate> {
+  public async create(
+    leaseTemplate: PersistedLeaseTemplate,
+  ): Promise<PersistedLeaseTemplate> {
     try {
       await this.ddbClient.send(
         new PutCommand({
           TableName: this.tableName,
-          Item: leaseTemplate,
+          Item: removeNullFieldsForDynamoDB(leaseTemplate),
           ReturnValues: "ALL_OLD",
           ConditionExpression: "attribute_not_exists(#uid)", //PK -- ensures item does not exist
           ExpressionAttributeNames: {
@@ -73,18 +77,36 @@ export class DynamoLeaseTemplateStore extends LeaseTemplateStore {
     }
   }
 
-  @validateItem(LeaseTemplateSchema)
+  @validateItem(PersistedLeaseTemplateSchema)
   @withMetadata(LeaseTemplateSchemaVersion)
   public async update(
-    leaseTemplate: LeaseTemplate,
-    expected?: LeaseTemplate,
-  ): Promise<PutResult<LeaseTemplate>> {
+    leaseTemplate: PersistedLeaseTemplate,
+    expected?: PersistedLeaseTemplate,
+  ): Promise<PutResult<PersistedLeaseTemplate>> {
+    // createdBy and createdTime are server-owned: preserve them from the
+    // persisted record so a caller cannot forge them on update. (@withMetadata
+    // only carries forward whatever meta was passed in, which may be forged.)
+    const persisted = await this.get(leaseTemplate.uuid);
+    if (!persisted.result) {
+      throw new UnknownItem("Unknown LeaseTemplate.");
+    }
+    leaseTemplate = {
+      ...leaseTemplate,
+      createdBy: persisted.result.createdBy,
+      meta: leaseTemplate.meta
+        ? {
+            ...leaseTemplate.meta,
+            createdTime: persisted.result.meta?.createdTime,
+          }
+        : leaseTemplate.meta,
+    };
+
     if (expected) {
       try {
         const result = await this.ddbClient.send(
           new PutCommand({
             TableName: this.tableName,
-            Item: leaseTemplate,
+            Item: removeNullFieldsForDynamoDB(leaseTemplate),
             ReturnValues: "ALL_OLD",
             ConditionExpression: `attribute_exists(#uid) and meta.lastEditTime = :expectedTime`,
             ExpressionAttributeValues: {
@@ -112,7 +134,7 @@ export class DynamoLeaseTemplateStore extends LeaseTemplateStore {
         const result = await this.ddbClient.send(
           new PutCommand({
             TableName: this.tableName,
-            Item: leaseTemplate,
+            Item: removeNullFieldsForDynamoDB(leaseTemplate),
             ReturnValues: "ALL_OLD",
             ConditionExpression: "attribute_exists(#uid)", //PK -- ensures item exists
             ExpressionAttributeNames: {
@@ -150,7 +172,7 @@ export class DynamoLeaseTemplateStore extends LeaseTemplateStore {
   public async findAll(props?: {
     pageIdentifier?: string;
     pageSize?: number;
-  }): Promise<PaginatedQueryResult<LeaseTemplate>> {
+  }): Promise<PaginatedQueryResult<PersistedLeaseTemplate>> {
     const { pageSize, pageIdentifier } = props ?? {};
 
     const result = await this.ddbClient.send(
@@ -161,8 +183,88 @@ export class DynamoLeaseTemplateStore extends LeaseTemplateStore {
       }),
     );
     return {
-      ...parseResults(result.Items, LeaseTemplateSchema),
+      ...parseResults(result.Items, PersistedLeaseTemplateSchema),
       nextPageIdentifier: base64EncodeCompositeKey(result.LastEvaluatedKey),
+    };
+  }
+
+  public async findAllVisible(props: {
+    pageIdentifier?: string;
+    pageSize?: number;
+    includePrivate: boolean;
+  }): Promise<PaginatedQueryResult<PersistedLeaseTemplate>> {
+    const { pageSize, pageIdentifier, includePrivate } = props;
+
+    // Elevated callers see everything; the plain scan is sufficient.
+    if (includePrivate) {
+      return this.findAll({ pageIdentifier, pageSize });
+    }
+
+    // For non-elevated callers, filter to PUBLIC server-side AND derive the
+    // pagination token from a PUBLIC item we actually return. DynamoDB applies
+    // Limit before FilterExpression, so LastEvaluatedKey can point at a PRIVATE
+    // item that was filtered out — using it directly would leak that item's
+    // UUID. Instead we scan until we have enough PUBLIC items (or the table is
+    // exhausted) and encode the last returned item's key as the token.
+    const collected: PersistedLeaseTemplate[] = [];
+    let exclusiveStartKey = base64DecodeCompositeKey(pageIdentifier);
+    let errorMessage: string | undefined;
+
+    do {
+      const result = await this.ddbClient.send(
+        new ScanCommand({
+          TableName: this.tableName,
+          ExclusiveStartKey: exclusiveStartKey,
+          Limit: pageSize,
+          // "not PRIVATE" rather than "= PUBLIC": legacy items written before
+          // the visibility attribute existed have no visibility field, and the
+          // schema defaults those to PUBLIC on read. attribute_not_exists keeps
+          // them visible, matching the prior application-layer filter.
+          FilterExpression:
+            "attribute_not_exists(#visibility) OR #visibility <> :private",
+          ExpressionAttributeNames: {
+            "#visibility": "visibility",
+          },
+          ExpressionAttributeValues: {
+            ":private": "PRIVATE",
+          },
+        }),
+      );
+
+      const parsed = parseResults(result.Items, PersistedLeaseTemplateSchema);
+      if (parsed.error) {
+        errorMessage = errorMessage
+          ? `${errorMessage}${parsed.error}`
+          : parsed.error;
+      }
+      collected.push(...parsed.result);
+      exclusiveStartKey = result.LastEvaluatedKey;
+    } while (
+      exclusiveStartKey !== undefined &&
+      (pageSize === undefined || collected.length < pageSize)
+    );
+
+    const page =
+      pageSize === undefined ? collected : collected.slice(0, pageSize);
+    const lastReturned = page.at(-1);
+
+    // More items may remain either because the table isn't exhausted, or
+    // because we over-collected past pageSize in the final scan (the overflow
+    // is dropped from this page and must be re-fetched on the next one). Emit a
+    // token in both cases, anchored to the last RETURNED item so the next page
+    // resumes exactly after it — this encodes a PUBLIC item's key, never a
+    // PRIVATE one, and never strands the overflow.
+    const hasOverflow = pageSize !== undefined && collected.length > pageSize;
+    const nextPageIdentifier =
+      (exclusiveStartKey !== undefined || hasOverflow) &&
+      lastReturned !== undefined
+        ? base64EncodeCompositeKey({ uuid: lastReturned.uuid })
+        : null;
+
+    return {
+      result: page,
+      nextPageIdentifier,
+      error: errorMessage,
     };
   }
 
@@ -170,7 +272,7 @@ export class DynamoLeaseTemplateStore extends LeaseTemplateStore {
     manager: string;
     pageIdentifier?: string;
     pageSize?: number;
-  }): Promise<PaginatedQueryResult<LeaseTemplate>> {
+  }): Promise<PaginatedQueryResult<PersistedLeaseTemplate>> {
     const result = await this.ddbClient.send(
       new ScanCommand({
         TableName: this.tableName,
@@ -186,12 +288,14 @@ export class DynamoLeaseTemplateStore extends LeaseTemplateStore {
       }),
     );
     return {
-      ...parseResults(result.Items, LeaseTemplateSchema),
+      ...parseResults(result.Items, PersistedLeaseTemplateSchema),
       nextPageIdentifier: base64EncodeCompositeKey(result.LastEvaluatedKey),
     };
   }
 
-  public async get(uuid: string): Promise<SingleItemResult<LeaseTemplate>> {
+  public async get(
+    uuid: string,
+  ): Promise<SingleItemResult<PersistedLeaseTemplate>> {
     const result = await this.ddbClient.send(
       new GetCommand({
         TableName: this.tableName,
@@ -199,6 +303,33 @@ export class DynamoLeaseTemplateStore extends LeaseTemplateStore {
       }),
     );
 
-    return parseSingleItemResult(result.Item, LeaseTemplateSchema);
+    return parseSingleItemResult(result.Item, PersistedLeaseTemplateSchema);
+  }
+
+  /**
+   * Finds lease templates that reference a specific blueprint.
+   *
+   * Returns only key fields (uuid, blueprintId) because the blueprintId-index GSI
+   * is configured with KEYS_ONLY projection. No schema validation is performed
+   * since partial items would fail validation against PersistedLeaseTemplateSchema.
+   */
+  public async findByBlueprintId(
+    blueprintId: string,
+  ): Promise<{ uuid: string; blueprintId: string }[]> {
+    const result = await this.ddbClient.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        IndexName: "blueprintId-index",
+        KeyConditionExpression: "blueprintId = :blueprintId",
+        ExpressionAttributeValues: {
+          ":blueprintId": blueprintId,
+        },
+      }),
+    );
+
+    return (result.Items || []).map((item) => ({
+      uuid: item.uuid as string,
+      blueprintId: item.blueprintId as string,
+    }));
   }
 }

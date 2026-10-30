@@ -4,15 +4,10 @@ import { Tracer } from "@aws-lambda-powertools/tracer";
 import { DateTime } from "luxon";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  BudgetThreshold,
-  DurationThreshold,
-} from "@amzn/innovation-sandbox-commons/data/lease-template/lease-template.js";
 import { DynamoLeaseStore } from "@amzn/innovation-sandbox-commons/data/lease/dynamo-lease-store.js";
 import {
-  Lease,
-  LeaseStatus,
-  MonitoredLease,
+  PersistedLease,
+  PersistedMonitoredLease,
 } from "@amzn/innovation-sandbox-commons/data/lease/lease.js";
 import { LeaseBudgetExceededAlert } from "@amzn/innovation-sandbox-commons/events/lease-budget-exceeded-alert.js";
 import { LeaseBudgetThresholdBreachedAlert } from "@amzn/innovation-sandbox-commons/events/lease-budget-threshold-breached-alert.js";
@@ -31,6 +26,11 @@ import { mockContext } from "@amzn/innovation-sandbox-commons/test/lambdas/fixtu
 import { bulkStubEnv } from "@amzn/innovation-sandbox-commons/test/lambdas/utils.js";
 import { now } from "@amzn/innovation-sandbox-commons/utils/time-utils.js";
 import { performAccountMonitoringScan } from "@amzn/innovation-sandbox-lease-monitoring/lease-monitoring-handler.js";
+import type {
+  BudgetThreshold,
+  DurationThreshold,
+} from "@amzn/innovation-sandbox-shared/types/lease-template.js";
+import { LeaseStatus } from "@amzn/innovation-sandbox-shared/types/lease.js";
 
 const costsMock = {
   ...new AccountsCostReport(),
@@ -57,6 +57,13 @@ beforeEach(() => {
   vi.spyOn(CostExplorerService.prototype, "getCostForLeases").mockResolvedValue(
     costsMock,
   );
+  // Default: tag query returns empty so existing tests fall through to the
+  // legacy `getCostForLeases` fallback (which returns `costsMock`). Specific
+  // tests below override this to exercise the tag-first partition.
+  vi.spyOn(
+    CostExplorerService.prototype,
+    "getCostForLeasesByTag",
+  ).mockResolvedValue(new AccountsCostReport());
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -66,7 +73,9 @@ afterEach(() => {
 function leaseStore() {
   return {
     findByStatus: {
-      returns: (leases: Partial<{ [key in LeaseStatus]: Lease[] }>) => {
+      returns: (
+        leases: Partial<{ [key in LeaseStatus]: PersistedLease[] }>,
+      ) => {
         vi.spyOn(DynamoLeaseStore.prototype, "findByStatus").mockImplementation(
           async (props: { status: LeaseStatus }) => {
             return {
@@ -81,7 +90,7 @@ function leaseStore() {
 }
 
 describe("performAccountMonitoringScan", () => {
-  const monitoredLeasesBase: MonitoredLease[] = [
+  const monitoredLeasesBase: PersistedMonitoredLease[] = [
     {
       userEmail: "test@example.com",
       uuid: "testLease101",
@@ -174,6 +183,268 @@ describe("performAccountMonitoringScan", () => {
           accountId: monitoredLeases[1]!.awsAccountId!,
           budget: monitoredLeases[1]!.maxSpend,
           totalSpend: costsMock.getCost(monitoredLeases[1]!.awsAccountId!),
+        }),
+      );
+    });
+
+    it("triggers LeaseBudgetExceeded when spend returned only on page 2 crosses max spend", async () => {
+      const lease = {
+        ...monitoredLeasesBase[0]!,
+        durationThresholds: [],
+        budgetThresholds: [],
+        maxSpend: 100,
+        totalCostAccrued: 80,
+      };
+      leaseStore().findByStatus.returns({ Active: [lease] });
+
+      vi.spyOn(CostExplorerService.prototype, "getCostForLeases").mockRestore();
+      const sendSpy = vi
+        .fn()
+        .mockResolvedValueOnce({
+          NextPageToken: "page-2",
+          ResultsByTime: [
+            {
+              Groups: [
+                {
+                  Keys: [lease.awsAccountId],
+                  Metrics: {
+                    UnblendedCost: { Amount: "80.00", Unit: "USD" },
+                  },
+                },
+              ],
+              TimePeriod: {
+                Start: now().minus({ days: 2 }).toFormat("yyyy-MM-dd"),
+                End: now().minus({ days: 1 }).toFormat("yyyy-MM-dd"),
+              },
+            },
+          ],
+        })
+        .mockResolvedValueOnce({
+          ResultsByTime: [
+            {
+              Groups: [
+                {
+                  Keys: [lease.awsAccountId],
+                  Metrics: {
+                    UnblendedCost: { Amount: "40.00", Unit: "USD" },
+                  },
+                },
+              ],
+              TimePeriod: {
+                Start: now().minus({ days: 1 }).toFormat("yyyy-MM-dd"),
+                End: now().toFormat("yyyy-MM-dd"),
+              },
+            },
+          ],
+        });
+      vi.spyOn(IsbClients, "costExplorer").mockReturnValue({
+        send: sendSpy,
+      } as any);
+
+      await performAccountMonitoringScan({} as any, mockContext(testEnv));
+
+      expect(sendSpy).toHaveBeenCalledTimes(2);
+      expect(sendSpy.mock.calls[1]![0].input.NextPageToken).toBe("page-2");
+      expect(mockSendIsbEvents).toHaveBeenCalledWith(
+        expect.any(Tracer),
+        new LeaseBudgetExceededAlert({
+          leaseId: {
+            userEmail: lease.userEmail,
+            uuid: lease.uuid,
+          },
+          accountId: lease.awsAccountId,
+          budget: lease.maxSpend,
+          totalSpend: 120,
+        }),
+      );
+    });
+
+    it("handles a mixed Active and Frozen catch-up cohort safely", async () => {
+      function cohortLease(
+        suffix: number,
+        status: "Active" | "Frozen",
+        maxSpend: number,
+        budgetThresholds: BudgetThreshold[],
+      ): PersistedMonitoredLease & { maxSpend: number } {
+        return {
+          ...monitoredLeasesBase[0]!,
+          userEmail: `cohort-${suffix}@example.com`,
+          uuid: `cohort-lease-${suffix}`,
+          awsAccountId: `12345678900${suffix}`,
+          status,
+          maxSpend,
+          totalCostAccrued: 80,
+          budgetThresholds,
+          durationThresholds: [],
+        };
+      }
+
+      const activeUnderThreshold = cohortLease(1, "Active", 200, [
+        { dollarsSpent: 100, action: "ALERT" },
+      ]);
+      const activePastAlert = cohortLease(2, "Active", 200, [
+        { dollarsSpent: 100, action: "ALERT" },
+      ]);
+      const activePastFreeze = cohortLease(3, "Active", 200, [
+        { dollarsSpent: 100, action: "FREEZE_ACCOUNT" },
+      ]);
+      const activeOverMaxSpend = cohortLease(4, "Active", 100, []);
+      const frozenPastFreeze = {
+        ...cohortLease(5, "Frozen", 200, [
+          { dollarsSpent: 90, action: "ALERT" },
+          { dollarsSpent: 100, action: "FREEZE_ACCOUNT" },
+        ]),
+        expirationDate: now().plus({ days: 10 }).toString(),
+        lastCheckedDate: now().minus({ days: 5 }).toString(),
+        durationThresholds: [
+          { hoursRemaining: 14 * 24, action: "ALERT" },
+          { hoursRemaining: 12 * 24, action: "FREEZE_ACCOUNT" },
+        ] as DurationThreshold[],
+      };
+      const frozenOverMaxSpend = cohortLease(6, "Frozen", 100, []);
+      const activeLeases = [
+        activeUnderThreshold,
+        activePastAlert,
+        activePastFreeze,
+        activeOverMaxSpend,
+      ];
+      const frozenLeases = [frozenPastFreeze, frozenOverMaxSpend];
+      const correctedCosts = new Map([
+        [activeUnderThreshold.awsAccountId, 90],
+        [activePastAlert.awsAccountId, 120],
+        [activePastFreeze.awsAccountId, 120],
+        [activeOverMaxSpend.awsAccountId, 120],
+        [frozenPastFreeze.awsAccountId, 120],
+        [frozenOverMaxSpend.awsAccountId, 120],
+      ]);
+      const correctedReport = new AccountsCostReport();
+      for (const [accountId, cost] of correctedCosts) {
+        correctedReport.addCost(accountId, cost);
+      }
+
+      leaseStore().findByStatus.returns({
+        Active: activeLeases,
+        Frozen: frozenLeases,
+      });
+      vi.spyOn(
+        CostExplorerService.prototype,
+        "getCostForLeases",
+      ).mockResolvedValue(correctedReport);
+
+      await performAccountMonitoringScan({} as any, mockContext(testEnv));
+
+      expect(mockSendIsbEvents).toHaveBeenCalledTimes(1);
+      expect(mockSendIsbEvents).toHaveBeenCalledWith(
+        expect.any(Tracer),
+        new LeaseBudgetThresholdBreachedAlert({
+          leaseId: {
+            userEmail: activePastAlert.userEmail,
+            uuid: activePastAlert.uuid,
+          },
+          accountId: activePastAlert.awsAccountId,
+          budget: activePastAlert.maxSpend,
+          budgetThresholdTriggered: 100,
+          totalSpend: 120,
+          actionRequested: "ALERT",
+        }),
+        new LeaseFreezingThresholdBreachedAlert({
+          leaseId: {
+            userEmail: activePastFreeze.userEmail,
+            uuid: activePastFreeze.uuid,
+          },
+          accountId: activePastFreeze.awsAccountId,
+          reason: {
+            type: "BudgetExceeded",
+            triggeredBudgetThreshold: 100,
+            budget: activePastFreeze.maxSpend,
+            totalSpend: 120,
+          },
+        }),
+        new LeaseBudgetExceededAlert({
+          leaseId: {
+            userEmail: activeOverMaxSpend.userEmail,
+            uuid: activeOverMaxSpend.uuid,
+          },
+          accountId: activeOverMaxSpend.awsAccountId,
+          budget: activeOverMaxSpend.maxSpend,
+          totalSpend: 120,
+        }),
+        new LeaseBudgetThresholdBreachedAlert({
+          leaseId: {
+            userEmail: frozenPastFreeze.userEmail,
+            uuid: frozenPastFreeze.uuid,
+          },
+          accountId: frozenPastFreeze.awsAccountId,
+          budget: frozenPastFreeze.maxSpend,
+          budgetThresholdTriggered: 90,
+          totalSpend: 120,
+          actionRequested: "ALERT",
+        }),
+        new LeaseDurationThresholdBreachedAlert({
+          leaseId: {
+            userEmail: frozenPastFreeze.userEmail,
+            uuid: frozenPastFreeze.uuid,
+          },
+          accountId: frozenPastFreeze.awsAccountId,
+          triggeredDurationThreshold: 14 * 24,
+          leaseDurationInHours: 40 * 24,
+          actionRequested: "ALERT",
+        }),
+        new LeaseBudgetExceededAlert({
+          leaseId: {
+            userEmail: frozenOverMaxSpend.userEmail,
+            uuid: frozenOverMaxSpend.uuid,
+          },
+          accountId: frozenOverMaxSpend.awsAccountId,
+          budget: frozenOverMaxSpend.maxSpend,
+          totalSpend: 120,
+        }),
+      );
+
+      const updates = vi
+        .mocked(DynamoLeaseStore.prototype.update)
+        .mock.calls.map(([lease]) => lease as PersistedMonitoredLease);
+      expect(updates).toHaveLength(6);
+      expect(
+        Object.fromEntries(
+          updates.map((lease) => [lease.awsAccountId, lease.totalCostAccrued]),
+        ),
+      ).toEqual(Object.fromEntries(correctedCosts));
+    });
+
+    it("does not emit redundant freeze events for a Frozen lease with only freeze thresholds", async () => {
+      const lease = {
+        ...monitoredLeasesBase[0]!,
+        status: "Frozen" as const,
+        maxSpend: 200,
+        totalCostAccrued: 80,
+        expirationDate: now().plus({ days: 10 }).toString(),
+        lastCheckedDate: now().minus({ days: 5 }).toString(),
+        budgetThresholds: [
+          { dollarsSpent: 100, action: "FREEZE_ACCOUNT" },
+        ] as BudgetThreshold[],
+        durationThresholds: [
+          { hoursRemaining: 12 * 24, action: "FREEZE_ACCOUNT" },
+        ] as DurationThreshold[],
+      };
+      const correctedReport = new AccountsCostReport();
+      correctedReport.addCost(lease.awsAccountId, 120);
+
+      leaseStore().findByStatus.returns({ Frozen: [lease] });
+      vi.spyOn(
+        CostExplorerService.prototype,
+        "getCostForLeases",
+      ).mockResolvedValue(correctedReport);
+
+      await performAccountMonitoringScan({} as any, mockContext(testEnv));
+
+      expect(mockSendIsbEvents).toHaveBeenCalledTimes(1);
+      expect(mockSendIsbEvents).toHaveBeenCalledWith(expect.any(Tracer));
+      expect(DynamoLeaseStore.prototype.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          uuid: lease.uuid,
+          status: "Frozen",
+          totalCostAccrued: 120,
         }),
       );
     });
@@ -309,6 +580,140 @@ describe("performAccountMonitoringScan", () => {
           actionRequested: "ALERT",
         }),
       );
+    });
+  });
+
+  describe("Tag-first cost attribution (Task 4.2 partition)", () => {
+    function buildTagReport(
+      entries: Record<string, number>,
+    ): AccountsCostReport {
+      const report = new AccountsCostReport();
+      for (const [leaseId, amount] of Object.entries(entries)) {
+        report.addCost(leaseId, amount);
+      }
+      return report;
+    }
+
+    it("does not call CostExplorer when no leases are being monitored", async () => {
+      leaseStore().findByStatus.returns({ Active: [], Frozen: [] });
+
+      const tagSpy = vi.spyOn(
+        CostExplorerService.prototype,
+        "getCostForLeasesByTag",
+      );
+      const fallbackSpy = vi.spyOn(
+        CostExplorerService.prototype,
+        "getCostForLeases",
+      );
+
+      await expect(
+        performAccountMonitoringScan({} as any, mockContext(testEnv)),
+      ).resolves.toBeDefined();
+      expect(tagSpy).not.toHaveBeenCalled();
+      expect(fallbackSpy).not.toHaveBeenCalled();
+    });
+
+    it("uses tag-only path when every lease is covered by the tag report (no fallback CE call)", async () => {
+      const monitoredLeases = monitoredLeasesBase;
+      leaseStore().findByStatus.returns({ Active: monitoredLeases });
+
+      const tagSpy = vi
+        .spyOn(CostExplorerService.prototype, "getCostForLeasesByTag")
+        .mockResolvedValue(
+          buildTagReport({
+            [monitoredLeases[0]!.uuid]: 90,
+            [monitoredLeases[1]!.uuid]: 110,
+          }),
+        );
+      const fallbackSpy = vi.spyOn(
+        CostExplorerService.prototype,
+        "getCostForLeases",
+      );
+
+      await performAccountMonitoringScan({} as any, mockContext(testEnv));
+
+      expect(tagSpy).toHaveBeenCalledTimes(1);
+      expect(fallbackSpy).not.toHaveBeenCalled();
+      // The lease store update should record the tag-derived costs against
+      // each lease's account ID — confirming the lease-UUID → account-ID
+      // re-keying happened.
+      const updateSpy = vi.spyOn(DynamoLeaseStore.prototype, "update");
+      const updates = updateSpy.mock.calls.map(
+        (c) => c[0],
+      ) as PersistedMonitoredLease[];
+      const account0Update = updates.find(
+        (u) => u.awsAccountId === monitoredLeases[0]!.awsAccountId,
+      );
+      const account1Update = updates.find(
+        (u) => u.awsAccountId === monitoredLeases[1]!.awsAccountId,
+      );
+      expect(account0Update?.totalCostAccrued).toBe(90);
+      expect(account1Update?.totalCostAccrued).toBe(110);
+    });
+
+    it("falls back entirely to legacy path when no leases are tag-covered", async () => {
+      const monitoredLeases = monitoredLeasesBase;
+      leaseStore().findByStatus.returns({ Active: monitoredLeases });
+
+      const tagSpy = vi
+        .spyOn(CostExplorerService.prototype, "getCostForLeasesByTag")
+        .mockResolvedValue(new AccountsCostReport());
+      const fallbackSpy = vi.spyOn(
+        CostExplorerService.prototype,
+        "getCostForLeases",
+      );
+
+      await performAccountMonitoringScan({} as any, mockContext(testEnv));
+
+      expect(tagSpy).toHaveBeenCalledTimes(1);
+      expect(fallbackSpy).toHaveBeenCalledTimes(1);
+      const fallbackArg = fallbackSpy.mock.calls[0]![0]!;
+      expect(Object.keys(fallbackArg).sort()).toEqual(
+        monitoredLeases.map((l) => l.awsAccountId).sort(),
+      );
+    });
+
+    it("partitions correctly when some leases are tag-covered and others are not", async () => {
+      const monitoredLeases = monitoredLeasesBase;
+      const taggedLease = monitoredLeases[0]!;
+      const untaggedLease = monitoredLeases[1]!;
+
+      leaseStore().findByStatus.returns({ Active: monitoredLeases });
+
+      vi.spyOn(
+        CostExplorerService.prototype,
+        "getCostForLeasesByTag",
+      ).mockResolvedValue(buildTagReport({ [taggedLease.uuid]: 95 }));
+
+      const fallbackSpy = vi
+        .spyOn(CostExplorerService.prototype, "getCostForLeases")
+        .mockResolvedValue(costsMock);
+
+      await performAccountMonitoringScan({} as any, mockContext(testEnv));
+
+      expect(fallbackSpy).toHaveBeenCalledTimes(1);
+      const fallbackArg = fallbackSpy.mock.calls[0]![0]!;
+      expect(Object.keys(fallbackArg)).toEqual([untaggedLease.awsAccountId]);
+    });
+
+    it("propagates tag-query CE failure without falling back (no silent masking)", async () => {
+      const monitoredLeases = monitoredLeasesBase;
+      leaseStore().findByStatus.returns({ Active: monitoredLeases });
+
+      const ceError = new Error("CE service unavailable");
+      vi.spyOn(
+        CostExplorerService.prototype,
+        "getCostForLeasesByTag",
+      ).mockRejectedValue(ceError);
+      const fallbackSpy = vi.spyOn(
+        CostExplorerService.prototype,
+        "getCostForLeases",
+      );
+
+      await expect(
+        performAccountMonitoringScan({} as any, mockContext(testEnv)),
+      ).rejects.toThrow("CE service unavailable");
+      expect(fallbackSpy).not.toHaveBeenCalled();
     });
   });
 

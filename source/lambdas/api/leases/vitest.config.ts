@@ -5,6 +5,9 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
+    setupFiles: [
+      path.resolve(__dirname, "../../../common/test/lambdas/api-test-setup.ts"),
+    ],
     coverage: {
       include: ["*.ts"],
     },

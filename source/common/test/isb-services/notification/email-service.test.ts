@@ -3,6 +3,8 @@
 
 import { AccountCleanupFailureEventSchema } from "@amzn/innovation-sandbox-commons/events/account-cleanup-failure-event.js";
 import { AccountDriftEventSchema } from "@amzn/innovation-sandbox-commons/events/account-drift-detected-alert.js";
+import { AssignmentCreatedEventSchema } from "@amzn/innovation-sandbox-commons/events/assignment-created-event.js";
+import { AssignmentRemovedEventSchema } from "@amzn/innovation-sandbox-commons/events/assignment-removed-event.js";
 import { GroupCostReportGeneratedEventSchema } from "@amzn/innovation-sandbox-commons/events/group-cost-report-generated-event.js";
 import { GroupCostReportGenerationFailureEventSchema } from "@amzn/innovation-sandbox-commons/events/group-cost-report-generated-failure-event.js";
 import { EventDetailTypes } from "@amzn/innovation-sandbox-commons/events/index.js";
@@ -16,13 +18,16 @@ import {
   LeaseFrozenEventSchema,
   LeaseFrozenManualSchema,
 } from "@amzn/innovation-sandbox-commons/events/lease-frozen-event.js";
+import { LeaseProvisioningFailedEventSchema } from "@amzn/innovation-sandbox-commons/events/lease-provisioning-failed-event.js";
 import { LeaseRequestedEventSchema } from "@amzn/innovation-sandbox-commons/events/lease-requested-event.js";
 import {
   LeaseTerminatedByBudgetSchema,
   LeaseTerminatedByDurationSchema,
+  LeaseTerminatedByUserSchema,
   LeaseTerminatedEjectedSchema,
   LeaseTerminatedEventSchema,
   LeaseTerminatedManualSchema,
+  LeaseTerminatedProvisioningFailedSchema,
   LeaseTerminatedQuarantinedSchema,
 } from "@amzn/innovation-sandbox-commons/events/lease-terminated-event.js";
 import { LeaseUnfrozenEventSchema } from "@amzn/innovation-sandbox-commons/events/lease-unfrozen-event.js";
@@ -58,19 +63,18 @@ vi.mock(
   },
 );
 
-const testEnv = generateSchemaData(EmailNotificationEnvironmentSchema);
+const testEnv = {
+  ...generateSchemaData(EmailNotificationEnvironmentSchema),
+  IDC_CONFIG_PARAM_ARN:
+    "arn:aws:ssm:us-east-1:123456789012:parameter/isb_test_idc_configuration",
+};
 
 const fromAddress = "example@example.com";
-const emailService = IsbServices.emailService(
-  {
-    ...testEnv,
-  },
-  {
-    fromAddress: fromAddress,
-    webAppUrl: "https://www.example.com",
-    logger: new Logger(),
-  },
-);
+const emailService = IsbServices.emailService(testEnv, {
+  fromAddress: fromAddress,
+  webAppUrl: "https://www.example.com",
+  logger: new Logger(),
+});
 
 const sesMock = mockClient(SESClient);
 beforeEach(() => {
@@ -98,6 +102,7 @@ describe("SES Service", async () => {
       expect(sesMock.calls().length).toEqual(1);
     });
     it.each<string>([
+      "AccessDenied",
       "AccountSendingPausedException",
       "ConfigurationSetDoesNotExistException",
       "ConfigurationSetSendingPausedException",
@@ -281,6 +286,55 @@ describe("SES Service", async () => {
     });
   });
 
+  describe("M2M synthetic recipient filtering", async () => {
+    const baseEmail = {
+      subject: "test subject",
+      textBody: "text body",
+      htmlBody: "html body",
+    };
+
+    beforeEach(() => {
+      sesMock.on(SendEmailCommand).resolves({ MessageId: "test-message-id" });
+    });
+
+    it("drops @automation.local recipients from the to: list", async () => {
+      await emailService.sendEmail({
+        ...baseEmail,
+        to: ["real@example.com", "m2m-client-Admin@automation.local"],
+        bcc: undefined,
+      });
+
+      expect(sesMock.calls().length).toEqual(1);
+      const input = sesMock.call(0).args[0].input as SendEmailCommand["input"];
+      expect(input.Destination?.ToAddresses).toEqual(["real@example.com"]);
+    });
+
+    it("skips the SES send entirely when every to: recipient is synthetic", async () => {
+      await emailService.sendEmail({
+        ...baseEmail,
+        to: ["m2m-client-Admin@automation.local"],
+        bcc: undefined,
+      });
+
+      expect(sesMock.calls().length).toEqual(0);
+    });
+
+    it("does not touch the bcc-only (admin/manager) path", async () => {
+      await emailService.sendEmail({
+        ...baseEmail,
+        to: undefined,
+        bcc: ["admin@example.com", "manager@example.com"],
+      });
+
+      expect(sesMock.calls().length).toEqual(1);
+      const input = sesMock.call(0).args[0].input as SendEmailCommand["input"];
+      expect(input.Destination?.BccAddresses).toEqual([
+        "admin@example.com",
+        "manager@example.com",
+      ]);
+    });
+  });
+
   describe("Email routing", async () => {
     sesMock.on(SendEmailCommand).resolves({
       MessageId: "test-message-id",
@@ -294,7 +348,7 @@ describe("SES Service", async () => {
       );
       assertSingleEmailActions({
         subject:
-          /\[Action Needed\] Innovation Sandbox: New Lease Approval Request/,
+          /\[Action Required\] Innovation Sandbox: New Lease Approval Request/,
         numSesMockCalls: 1,
         bccAddresses: [...adminEmails, ...managerEmails],
       });
@@ -368,7 +422,10 @@ describe("SES Service", async () => {
       });
     });
     it(`should send email - ${EventDetailTypes.AccountDriftDetected}`, async () => {
-      const isbAlert = generateSchemaData(AccountDriftEventSchema);
+      const isbAlert = generateSchemaData(AccountDriftEventSchema, {
+        expectedOu: "Active",
+        actualOu: "Quarantine",
+      });
       await emailService.sendNotificationEmail(
         EventDetailTypes.AccountDriftDetected,
         isbAlert,
@@ -377,7 +434,7 @@ describe("SES Service", async () => {
         subject: /\[Action Required\] Innovation Sandbox: Account Drift/,
         numSesMockCalls: 1,
         bccAddresses: [...adminEmails],
-        body: `The account id: ${isbAlert.accountId}`,
+        body: `The account ID: ${isbAlert.accountId}`,
       });
     });
 
@@ -393,7 +450,7 @@ describe("SES Service", async () => {
         subject: /\[Action Required\] Innovation Sandbox: Account Drift/,
         numSesMockCalls: 1,
         bccAddresses: [...adminEmails],
-        body: "Untracked account id:",
+        body: "Untracked account ID:",
       });
     });
 
@@ -452,6 +509,18 @@ describe("SES Service", async () => {
       });
     });
 
+    it(`should send no email - ${EventDetailTypes.LeaseTerminated} user terminated`, async () => {
+      const LeaseUserTerminatedEventSchema = LeaseTerminatedEventSchema.extend({
+        reason: LeaseTerminatedByUserSchema,
+      });
+      const isbAlert = generateSchemaData(LeaseUserTerminatedEventSchema);
+      await emailService.sendNotificationEmail(
+        EventDetailTypes.LeaseTerminated,
+        isbAlert,
+      );
+      expect(sesMock.calls().length).toEqual(0);
+    });
+
     it(`should send email - ${EventDetailTypes.LeaseTerminated} quarantined`, async () => {
       const QuarantinedEventSchema = LeaseTerminatedEventSchema.extend({
         reason: LeaseTerminatedQuarantinedSchema,
@@ -485,6 +554,39 @@ describe("SES Service", async () => {
       });
     });
 
+    it(`should send email - ${EventDetailTypes.LeaseTerminated} provisioning failed`, async () => {
+      const ProvisioningFailedEventSchema = LeaseTerminatedEventSchema.extend({
+        reason: LeaseTerminatedProvisioningFailedSchema,
+      });
+      const isbAlert = generateSchemaData(ProvisioningFailedEventSchema);
+      await emailService.sendNotificationEmail(
+        EventDetailTypes.LeaseTerminated,
+        isbAlert,
+      );
+      assertLeaseTerminatedFrozen({
+        toAddresses: [isbAlert.leaseId.userEmail],
+        userSubject:
+          /\[Informational\] Innovation Sandbox: Blueprint Deployment Failed/,
+        adminManagerSubject:
+          /\[Action Required\] Innovation Sandbox: Blueprint Deployment Failed/,
+      });
+    });
+
+    it(`should send email - ${EventDetailTypes.LeaseProvisioningFailed}`, async () => {
+      const isbAlert = generateSchemaData(LeaseProvisioningFailedEventSchema);
+      await emailService.sendNotificationEmail(
+        EventDetailTypes.LeaseProvisioningFailed,
+        isbAlert,
+      );
+      assertSingleEmailActions({
+        subject:
+          /\[Action Required\] Innovation Sandbox: Blueprint Deployment Failed/,
+        numSesMockCalls: 1,
+        bccAddresses: [...adminEmails, ...managerEmails],
+        body: "Blueprint deployment failed",
+      });
+    });
+
     it(`should send email - ${EventDetailTypes.LeaseFrozen} by duration`, async () => {
       const LeaseFrozenByDurationEventSchema = LeaseFrozenEventSchema.extend({
         reason: LeaseFrozenByDurationSchema,
@@ -499,7 +601,7 @@ describe("SES Service", async () => {
         userSubject:
           /\[Informational\] Innovation Sandbox: Account Freeze Action based on Lease Duration/,
         adminManagerSubject:
-          /\[Action Needed\] Innovation Sandbox: Account Freeze Action based on Lease Duration/,
+          /\[Action Required\] Innovation Sandbox: Account Freeze Action based on Lease Duration/,
       });
     });
 
@@ -517,7 +619,7 @@ describe("SES Service", async () => {
         userSubject:
           /\[Informational\] Innovation Sandbox: Account Freeze Action based on Allowed Budget/,
         adminManagerSubject:
-          /\[Action Needed\] Innovation Sandbox: Account Freeze Action based on Allowed Budget/,
+          /\[Action Required\] Innovation Sandbox: Account Freeze Action based on Allowed Budget/,
       });
     });
 
@@ -568,6 +670,7 @@ describe("SES Service", async () => {
     it(`should send email - ${EventDetailTypes.GroupCostReportGeneratedFailure}`, async () => {
       const isbAlert = generateSchemaData(
         GroupCostReportGenerationFailureEventSchema,
+        { reportMonth: "2024-06" },
       );
       await emailService.sendNotificationEmail(
         EventDetailTypes.GroupCostReportGeneratedFailure,
@@ -580,6 +683,117 @@ describe("SES Service", async () => {
         numSesMockCalls: 1,
         bccAddresses: [...adminEmails],
         body: "Group Cost Report Generation Failed",
+      });
+    });
+
+    it(`should send email - ${EventDetailTypes.AssignmentCreated} with assigneeEmail`, async () => {
+      const isbAlert = generateSchemaData(AssignmentCreatedEventSchema, {
+        leaseId: "550e8400-e29b-41d4-a716-446655440000",
+        principalId: "d-1234567890-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        principalType: "USER",
+        assigneeEmail: "assignee@example.com",
+        accountId: "123456789012",
+        addedBy: "owner@example.com",
+        leaseOwner: "owner@example.com",
+      });
+      await emailService.sendNotificationEmail(
+        EventDetailTypes.AssignmentCreated,
+        isbAlert,
+      );
+      assertSingleEmailActions({
+        subject:
+          /\[Informational\] Innovation Sandbox: Access granted to a lease/,
+        numSesMockCalls: 1,
+        toAddresses: ["owner@example.com", "assignee@example.com"],
+        body: "Access for assignee@example.com",
+      });
+    });
+
+    it(`should send email - ${EventDetailTypes.AssignmentCreated} without assigneeEmail (group)`, async () => {
+      const isbAlert = generateSchemaData(AssignmentCreatedEventSchema, {
+        leaseId: "550e8400-e29b-41d4-a716-446655440000",
+        principalId: "d-1234567890-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        principalType: "GROUP",
+        assigneeEmail: undefined,
+        addedBy: "owner@example.com",
+        leaseOwner: "owner@example.com",
+      });
+      await emailService.sendNotificationEmail(
+        EventDetailTypes.AssignmentCreated,
+        isbAlert,
+      );
+      assertSingleEmailActions({
+        subject:
+          /\[Informational\] Innovation Sandbox: Access granted to a lease/,
+        numSesMockCalls: 1,
+        toAddresses: ["owner@example.com"],
+        body: "Access for d-1234567890-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      });
+    });
+
+    it(`should send email - ${EventDetailTypes.AssignmentCreated} deduplicates when leaseOwner equals assigneeEmail`, async () => {
+      const isbAlert = generateSchemaData(AssignmentCreatedEventSchema, {
+        leaseId: "550e8400-e29b-41d4-a716-446655440000",
+        principalId: "d-1234567890-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        principalType: "USER",
+        assigneeEmail: "owner@example.com",
+        addedBy: "admin@example.com",
+        leaseOwner: "owner@example.com",
+      });
+      await emailService.sendNotificationEmail(
+        EventDetailTypes.AssignmentCreated,
+        isbAlert,
+      );
+      assertSingleEmailActions({
+        subject:
+          /\[Informational\] Innovation Sandbox: Access granted to a lease/,
+        numSesMockCalls: 1,
+        toAddresses: ["owner@example.com"],
+      });
+    });
+
+    it(`should send email - ${EventDetailTypes.AssignmentRemoved} with assigneeEmail`, async () => {
+      const isbAlert = generateSchemaData(AssignmentRemovedEventSchema, {
+        leaseId: "550e8400-e29b-41d4-a716-446655440000",
+        principalId: "d-1234567890-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        principalType: "USER",
+        assigneeEmail: "assignee@example.com",
+        accountId: "123456789012",
+        removedBy: "owner@example.com",
+        leaseOwner: "owner@example.com",
+      });
+      await emailService.sendNotificationEmail(
+        EventDetailTypes.AssignmentRemoved,
+        isbAlert,
+      );
+      assertSingleEmailActions({
+        subject:
+          /\[Informational\] Innovation Sandbox: Access removed from a lease/,
+        numSesMockCalls: 1,
+        toAddresses: ["owner@example.com", "assignee@example.com"],
+        body: "assignee@example.com",
+      });
+    });
+
+    it(`should send email - ${EventDetailTypes.AssignmentRemoved} without assigneeEmail (group)`, async () => {
+      const isbAlert = generateSchemaData(AssignmentRemovedEventSchema, {
+        leaseId: "550e8400-e29b-41d4-a716-446655440000",
+        principalId: "d-1234567890-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        principalType: "GROUP",
+        assigneeEmail: undefined,
+        removedBy: "owner@example.com",
+        leaseOwner: "owner@example.com",
+      });
+      await emailService.sendNotificationEmail(
+        EventDetailTypes.AssignmentRemoved,
+        isbAlert,
+      );
+      assertSingleEmailActions({
+        subject:
+          /\[Informational\] Innovation Sandbox: Access removed from a lease/,
+        numSesMockCalls: 1,
+        toAddresses: ["owner@example.com"],
+        body: "d-1234567890-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
       });
     });
 

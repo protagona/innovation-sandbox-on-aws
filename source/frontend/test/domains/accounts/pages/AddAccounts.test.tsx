@@ -7,24 +7,18 @@ import { http, HttpResponse } from "msw";
 import { BrowserRouter as Router } from "react-router-dom";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 
-import { showErrorToast } from "@amzn/innovation-sandbox-frontend/components/Toast";
+import {
+  showErrorToast,
+  showSuccessToast,
+} from "@amzn/innovation-sandbox-frontend/components/Toast";
 import { AddAccounts } from "@amzn/innovation-sandbox-frontend/domains/accounts/pages/AddAccounts";
-import { config } from "@amzn/innovation-sandbox-frontend/helpers/config";
+import { getConfig } from "@amzn/innovation-sandbox-frontend/helpers/config";
 import { ModalProvider } from "@amzn/innovation-sandbox-frontend/hooks/useModal";
 import { mockUnregisteredAccounts } from "@amzn/innovation-sandbox-frontend/mocks/factories/accountFactory";
 import { server } from "@amzn/innovation-sandbox-frontend/mocks/server";
 import { renderWithQueryClient } from "@amzn/innovation-sandbox-frontend/setupTests";
 
-const mockNavigate = vi.fn();
 const mockSetBreadcrumb = vi.fn();
-
-vi.mock("react-router-dom", async () => {
-  const actual = await vi.importActual("react-router-dom");
-  return {
-    ...actual,
-    useNavigate: () => mockNavigate,
-  };
-});
 
 vi.mock("@amzn/innovation-sandbox-frontend/hooks/useBreadcrumb", () => ({
   useBreadcrumb: () => mockSetBreadcrumb,
@@ -32,13 +26,14 @@ vi.mock("@amzn/innovation-sandbox-frontend/hooks/useBreadcrumb", () => ({
 
 vi.mock("@amzn/innovation-sandbox-frontend/components/Toast", () => ({
   showErrorToast: vi.fn(),
+  showSuccessToast: vi.fn(),
 }));
 
-beforeEach(() => {
-  mockNavigate.mockClear();
-});
-
 describe("AddAccounts", () => {
+  // Get mocked functions
+  const mockedShowSuccessToast = vi.mocked(showSuccessToast);
+  const mockedShowErrorToast = vi.mocked(showErrorToast);
+
   const renderComponent = () =>
     renderWithQueryClient(
       <Router>
@@ -47,6 +42,10 @@ describe("AddAccounts", () => {
         </ModalProvider>
       </Router>,
     );
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
   test("renders the add accounts form with correct title", async () => {
     renderComponent();
@@ -84,7 +83,7 @@ describe("AddAccounts", () => {
     expect(checkboxes[0]).toBeChecked();
   });
 
-  test("submits form and navigates on successful submission", async () => {
+  test("submits form successfully", async () => {
     renderComponent();
     const user = userEvent.setup();
 
@@ -119,13 +118,15 @@ describe("AddAccounts", () => {
     await user.click(submitButton);
 
     await waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalledWith("/accounts");
+      expect(mockedShowSuccessToast).toHaveBeenCalledWith(
+        "Accounts were successfully registered with the solution and are now in cleanup.",
+      );
     });
   });
 
   test("displays error message on submission failure", async () => {
     server.use(
-      http.post(`${config.ApiUrl}/accounts`, () => {
+      http.post(`${getConfig().ApiUrl}/accounts`, () => {
         return HttpResponse.json(
           { status: "error", message: "Failed to add accounts" },
           { status: 500 },
@@ -158,8 +159,7 @@ describe("AddAccounts", () => {
     await user.click(submitButton);
 
     await waitFor(() => {
-      expect(mockNavigate).not.toHaveBeenCalled();
-      expect(showErrorToast).toHaveBeenCalledWith(
+      expect(mockedShowErrorToast).toHaveBeenCalledWith(
         "One or more accounts failed to register, try resubmitting registration.",
         "Failed to register accounts",
       );

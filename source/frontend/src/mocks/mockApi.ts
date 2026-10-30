@@ -3,18 +3,29 @@
 
 import { http, HttpResponse } from "msw";
 
-import { GlobalConfigForUI } from "@amzn/innovation-sandbox-commons/data/global-config/global-config.js";
-import { LeaseTemplate } from "@amzn/innovation-sandbox-commons/data/lease-template/lease-template.js";
-import { Lease } from "@amzn/innovation-sandbox-commons/data/lease/lease.js";
-import { SandboxAccount } from "@amzn/innovation-sandbox-commons/data/sandbox-account/sandbox-account.js";
-import { UnregisteredAccount } from "@amzn/innovation-sandbox-frontend/domains/accounts/types";
-import { config } from "@amzn/innovation-sandbox-frontend/helpers/config";
+import {
+  SandboxAccountView,
+  UnregisteredAccountView,
+} from "@amzn/innovation-sandbox-frontend/domains/accounts/model";
+import { BlueprintWithStackSetsView } from "@amzn/innovation-sandbox-frontend/domains/blueprints/model";
+import { LeaseView } from "@amzn/innovation-sandbox-frontend/domains/leases/model";
+import { LeaseTemplateView } from "@amzn/innovation-sandbox-frontend/domains/leaseTemplates/model";
+import { AdminConfigurationView } from "@amzn/innovation-sandbox-frontend/domains/settings/model";
+import { getConfig } from "@amzn/innovation-sandbox-frontend/helpers/config";
 import {
   ApiFailResponse,
   ApiPaginatedResult,
   ApiResponse,
   ApiSuccessResponse,
 } from "@amzn/innovation-sandbox-frontend/types";
+import { IDENTITY_HEADER } from "@amzn/innovation-sandbox-shared/utils/auth-utils.js";
+
+// `ALGORITHM_IDENTIFIER` from @smithy/signature-v4. Inlined because the
+// @smithy/signature-v4 version transitively pulled in by
+// @aws-sdk/signature-v4@3.374.0 doesn't re-export `./constants`, so the
+// constant isn't reachable via the public package entry; pinning the literal
+// avoids reaching into a transitive dependency's internals.
+const SIGV4_ALGORITHM = "AWS4-HMAC-SHA256";
 
 class MockApi<T> {
   private mockData: T | T[] | null = null;
@@ -29,7 +40,7 @@ class MockApi<T> {
   }
 
   private handleUnregisteredAccounts() {
-    return http.get(`${config.ApiUrl}/accounts/unregistered`, () => {
+    return http.get(`${getConfig().ApiUrl}/accounts/unregistered`, () => {
       if (this.mockData === null) {
         return new HttpResponse(null, { status: 404 });
       }
@@ -79,8 +90,16 @@ class MockApi<T> {
   private validateRequest(
     request: Request,
   ): HttpResponse<ApiFailResponse> | null {
+    // SigV4-signed requests carry an `Authorization: AWS4-HMAC-SHA256 ...`
+    // header AND an `x-isb-identity` ID-token header. Mock dev server only
+    // checks both are present — signature is not verified locally.
     const authHeader = request.headers.get("Authorization");
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    const identityHeader = request.headers.get(IDENTITY_HEADER);
+    if (
+      !authHeader ||
+      !authHeader.startsWith(SIGV4_ALGORITHM) ||
+      !identityHeader
+    ) {
       return new HttpResponse(null, { status: 401 });
     }
     return null;
@@ -98,7 +117,10 @@ class MockApi<T> {
 
     if (params.id) {
       filteredResult = filteredResult.filter(
-        (item: any) => item.uuid === params.id,
+        (item: any) =>
+          item.uuid === params.id ||
+          item.blueprintId === params.id ||
+          item.blueprint?.blueprintId === params.id,
       );
     }
 
@@ -117,7 +139,7 @@ class MockApi<T> {
     }
 
     return http.get(
-      `${config.ApiUrl}${this.endpoint}${subPath}`,
+      `${getConfig().ApiUrl}${this.endpoint}${subPath}`,
       async ({ request, params }) => {
         if (this.mockData === null) {
           return new HttpResponse(null, { status: 404 });
@@ -145,7 +167,7 @@ class MockApi<T> {
   }
 
   postHandler(subPath: string = "") {
-    return http.post(`${config.ApiUrl}${this.endpoint}${subPath}`, () => {
+    return http.post(`${getConfig().ApiUrl}${this.endpoint}${subPath}`, () => {
       if (this.mockData === null) {
         return new HttpResponse(null, { status: 404 });
       }
@@ -161,7 +183,7 @@ class MockApi<T> {
 
   deleteHandler(subPath: string = "") {
     return http.delete(
-      `${config.ApiUrl}${this.endpoint}${subPath}`,
+      `${getConfig().ApiUrl}${this.endpoint}${subPath}`,
       ({ params }) => {
         if (Array.isArray(this.mockData)) {
           this.mockData = this.mockData.filter(
@@ -175,7 +197,7 @@ class MockApi<T> {
 
   patchHandler(subPath: string = "") {
     return http.patch(
-      `${config.ApiUrl}${this.endpoint}${subPath}`,
+      `${getConfig().ApiUrl}${this.endpoint}${subPath}`,
       async ({ request, params }) => {
         if (this.mockData === null) {
           return new HttpResponse(null, { status: 404 });
@@ -210,7 +232,7 @@ class MockApi<T> {
   }
 
   putHandler(subPath: string = "") {
-    return http.put(`${config.ApiUrl}${this.endpoint}${subPath}`, () => {
+    return http.put(`${getConfig().ApiUrl}${this.endpoint}${subPath}`, () => {
       if (this.mockData === null) {
         return new HttpResponse(null, { status: 404 });
       }
@@ -226,7 +248,7 @@ class MockApi<T> {
 
   reviewHandler(subPath: string = "") {
     return http.post(
-      `${config.ApiUrl}${this.endpoint}${subPath}`,
+      `${getConfig().ApiUrl}${this.endpoint}${subPath}`,
       async ({ request }) => {
         if (this.mockData === null) {
           return new HttpResponse(null, { status: 404 });
@@ -258,14 +280,17 @@ class MockApi<T> {
   }
 }
 
-export const mockLeaseApi = new MockApi<Lease>("/leases");
-export const mockLeaseTemplateApi = new MockApi<LeaseTemplate>(
+export const mockLeaseApi = new MockApi<LeaseView>("/leases");
+export const mockLeaseTemplateApi = new MockApi<LeaseTemplateView>(
   "/leaseTemplates",
 );
-export const mockConfigurationApi = new MockApi<GlobalConfigForUI>(
+export const mockConfigurationApi = new MockApi<AdminConfigurationView>(
   "/configurations",
 );
-export const mockUnregisteredAccountApi = new MockApi<UnregisteredAccount>(
+export const mockUnregisteredAccountApi = new MockApi<UnregisteredAccountView>(
   "/accounts/unregistered",
 );
-export const mockAccountApi = new MockApi<SandboxAccount>("/accounts");
+export const mockAccountApi = new MockApi<SandboxAccountView>("/accounts");
+export const mockBlueprintApi = new MockApi<BlueprintWithStackSetsView>(
+  "/blueprints",
+);

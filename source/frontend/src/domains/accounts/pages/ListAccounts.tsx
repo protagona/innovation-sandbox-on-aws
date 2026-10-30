@@ -3,72 +3,85 @@
 
 import { Table } from "@aws-northstar/ui";
 import {
+  Alert,
   Button,
   ButtonDropdown,
   Container,
-  ContentLayout,
   Header,
   Popover,
   SpaceBetween,
 } from "@cloudscape-design/components";
-import moment from "moment";
+import { useQueryClient } from "@tanstack/react-query";
+import { DateTime } from "luxon";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import {
-  SandboxAccount,
-  SandboxAccountStatus,
-} from "@amzn/innovation-sandbox-commons/data/sandbox-account/sandbox-account";
 import { AccountLoginLink } from "@amzn/innovation-sandbox-frontend/components/AccountLoginLink";
 import { AccountsSummary } from "@amzn/innovation-sandbox-frontend/components/AccountsSummary";
+import { useAppLayoutContext } from "@amzn/innovation-sandbox-frontend/components/AppLayout/AppLayoutContext";
+import { ContentLayout } from "@amzn/innovation-sandbox-frontend/components/ContentLayout";
 import { Markdown } from "@amzn/innovation-sandbox-frontend/components/Markdown";
 import { BatchActionReview } from "@amzn/innovation-sandbox-frontend/components/MultiSelectTableActionReview";
+import { TextLink } from "@amzn/innovation-sandbox-frontend/components/TextLink";
 import {
   showErrorToast,
   showSuccessToast,
 } from "@amzn/innovation-sandbox-frontend/components/Toast";
 import { AccountStatusIndicator } from "@amzn/innovation-sandbox-frontend/domains/accounts/components/AccountStatusIndicator";
-import { accountStatusSortingComparator } from "@amzn/innovation-sandbox-frontend/domains/accounts/helpers";
+import {
+  accountStatusSortingComparator,
+  isCleanupLockActive,
+} from "@amzn/innovation-sandbox-frontend/domains/accounts/helpers";
 import {
   useCleanupAccount,
   useEjectAccount,
   useGetAccounts,
+  useQuarantineAccount,
 } from "@amzn/innovation-sandbox-frontend/domains/accounts/hooks";
+import { SandboxAccountView } from "@amzn/innovation-sandbox-frontend/domains/accounts/model";
+import { createDateSortingComparator } from "@amzn/innovation-sandbox-frontend/helpers/date-sorting-comparator";
 import { useBreadcrumb } from "@amzn/innovation-sandbox-frontend/hooks/useBreadcrumb";
 import { useModal } from "@amzn/innovation-sandbox-frontend/hooks/useModal";
-import { useAppLayoutContext } from "@aws-northstar/ui/components/AppLayout";
+import { SandboxAccountStatus } from "@amzn/innovation-sandbox-shared/types/sandbox-account";
 
-const StatusCell = ({ account }: { account: SandboxAccount }) => (
+const StatusCell = ({ account }: { account: SandboxAccountView }) => (
   <AccountStatusIndicator
     status={account.status}
+    activeCleanup={account.activeCleanup}
     lastCleanupStartTime={
-      account.cleanupExecutionContext?.stateMachineExecutionStartTime!
+      account.cleanupExecutionContext?.stateMachineExecutionStartTime
     }
   />
 );
 
-const CreatedOnCell = ({ account }: { account: SandboxAccount }) => (
-  <Popover
-    position="top"
-    dismissButton={false}
-    content={moment(account.meta?.createdTime).format("MM/DD/YYYY hh:mm:A")}
-  >
-    {moment(account.meta?.createdTime).fromNow()}
-  </Popover>
-);
+const CreatedOnCell = ({ account }: { account: SandboxAccountView }) =>
+  account.meta?.createdTime && (
+    <Popover
+      position="top"
+      dismissButton={false}
+      content={DateTime.fromISO(account.meta?.createdTime).toFormat(
+        "MM/dd/yyyy hh:mm:a",
+      )}
+    >
+      {DateTime.fromISO(account.meta?.createdTime).toRelative()}
+    </Popover>
+  );
 
-const LastModifiedCell = ({ account }: { account: SandboxAccount }) => (
-  <Popover
-    position="top"
-    dismissButton={false}
-    content={moment(account.meta?.lastEditTime).format("MM/DD/YYYY hh:mm:A")}
-  >
-    {moment(account.meta?.lastEditTime).fromNow()}
-  </Popover>
-);
+const LastModifiedCell = ({ account }: { account: SandboxAccountView }) =>
+  account.meta?.lastEditTime && (
+    <Popover
+      position="top"
+      dismissButton={false}
+      content={DateTime.fromISO(account.meta?.lastEditTime).toFormat(
+        "MM/dd/yyyy hh:mm:a",
+      )}
+    >
+      {DateTime.fromISO(account.meta?.lastEditTime).toRelative()}
+    </Popover>
+  );
 
-const AccessCell = ({ account }: { account: SandboxAccount }) => (
-  <AccountLoginLink accountId={account.awsAccountId} />
+const AccessCell = ({ account }: { account: SandboxAccountView }) => (
+  <AccountLoginLink accountId={account.awsAccountId} wrapText={false} />
 );
 
 const createColumnDefinitions = (includeLinks: boolean) =>
@@ -77,64 +90,87 @@ const createColumnDefinitions = (includeLinks: boolean) =>
       id: "awsAccountId",
       header: "Account ID",
       sortingField: "awsAccountId",
-      cell: (account: SandboxAccount) => account.awsAccountId,
+      cell: (account: SandboxAccountView) => (
+        <TextLink to={`/accounts/${account.awsAccountId}`}>
+          {account.awsAccountId}
+        </TextLink>
+      ),
     },
     {
       id: "status",
       header: "Status",
       sortingComparator: accountStatusSortingComparator,
-      cell: (account: SandboxAccount) => <StatusCell account={account} />,
+      cell: (account: SandboxAccountView) => <StatusCell account={account} />,
     },
     {
       id: "createdOn",
       header: "Added",
-      sortingField: "createdOn",
-      cell: (account: SandboxAccount) => <CreatedOnCell account={account} />,
+      sortingComparator: createDateSortingComparator<SandboxAccountView>(
+        (a) => a.meta?.createdTime,
+      ),
+      cell: (account: SandboxAccountView) => (
+        <CreatedOnCell account={account} />
+      ),
     },
     {
       id: "lastModifiedOn",
       header: "Last Modified",
-      sortingField: "lastModifiedOn",
-      cell: (account: SandboxAccount) => <LastModifiedCell account={account} />,
+      sortingComparator: createDateSortingComparator<SandboxAccountView>(
+        (a) => a.meta?.lastEditTime,
+      ),
+      cell: (account: SandboxAccountView) => (
+        <LastModifiedCell account={account} />
+      ),
     },
     {
       id: "name",
       header: "Name",
-      cell: (account: SandboxAccount) => account.name ?? "N/A",
+      cell: (account: SandboxAccountView) => account.name ?? "N/A",
     },
     {
       id: "email",
       header: "Email",
-      cell: (account: SandboxAccount) => account.email ?? "N/A",
+      cell: (account: SandboxAccountView) => account.email ?? "N/A",
     },
     {
       id: "link",
       header: "Access",
-      cell: (account: SandboxAccount) => <AccessCell account={account} />,
+      cell: (account: SandboxAccountView) => <AccessCell account={account} />,
     },
   ].filter((column) => includeLinks || column.id !== "link");
 
 type EjectModalProps = {
-  selectedAccounts: SandboxAccount[];
+  selectedAccounts: SandboxAccountView[];
   ejectAccount: (accountId: string) => Promise<any>;
-  navigate: (path: string) => void;
+  queryClient: any;
+  setSelectedAccounts: React.Dispatch<
+    React.SetStateAction<SandboxAccountView[]>
+  >;
 };
 
 const EjectModalContent = ({
   selectedAccounts,
   ejectAccount,
-  navigate,
+  queryClient,
+  setSelectedAccounts,
 }: EjectModalProps) => (
   <BatchActionReview
     items={selectedAccounts}
     description={`${selectedAccounts.length} account(s) to eject`}
     columnDefinitions={createColumnDefinitions(false)}
     identifierKey="awsAccountId"
-    onSubmit={async (account: SandboxAccount) => {
+    sequential
+    onSubmit={async (account: SandboxAccountView) => {
       await ejectAccount(account.awsAccountId);
+      setSelectedAccounts((prev) =>
+        prev.filter((a) => a.awsAccountId !== account.awsAccountId),
+      );
     }}
     onSuccess={() => {
-      navigate("/accounts");
+      queryClient.invalidateQueries({
+        queryKey: ["accounts"],
+        refetchType: "all",
+      });
       showSuccessToast(
         "Account(s) were successfully ejected from the account pool.",
       );
@@ -149,26 +185,37 @@ const EjectModalContent = ({
 );
 
 type CleanupModalProps = {
-  selectedAccounts: SandboxAccount[];
+  selectedAccounts: SandboxAccountView[];
   cleanupAccount: (accountId: string) => Promise<any>;
-  navigate: (path: string) => void;
+  queryClient: any;
+  setSelectedAccounts: React.Dispatch<
+    React.SetStateAction<SandboxAccountView[]>
+  >;
 };
 
 const CleanupModalContent = ({
   selectedAccounts,
   cleanupAccount,
-  navigate,
+  queryClient,
+  setSelectedAccounts,
 }: CleanupModalProps) => (
   <BatchActionReview
     items={selectedAccounts}
     description={`${selectedAccounts.length} account(s) to retry cleanup`}
     columnDefinitions={createColumnDefinitions(false)}
     identifierKey="awsAccountId"
-    onSubmit={async (account: SandboxAccount) => {
+    sequential
+    onSubmit={async (account: SandboxAccountView) => {
       await cleanupAccount(account.awsAccountId);
+      setSelectedAccounts((prev) =>
+        prev.filter((a) => a.awsAccountId !== account.awsAccountId),
+      );
     }}
     onSuccess={() => {
-      navigate("/accounts");
+      queryClient.invalidateQueries({
+        queryKey: ["accounts"],
+        refetchType: "all",
+      });
       showSuccessToast("Account(s) were successfully sent to retry cleanup");
     }}
     onError={() =>
@@ -180,6 +227,69 @@ const CleanupModalContent = ({
   />
 );
 
+type QuarantineModalProps = {
+  selectedAccounts: SandboxAccountView[];
+  quarantineAccount: (accountId: string) => Promise<any>;
+  queryClient: any;
+  setSelectedAccounts: React.Dispatch<
+    React.SetStateAction<SandboxAccountView[]>
+  >;
+};
+
+const QuarantineModalContent = ({
+  selectedAccounts,
+  quarantineAccount,
+  queryClient,
+  setSelectedAccounts,
+}: QuarantineModalProps) => (
+  <SpaceBetween size="m">
+    <Alert type="warning">
+      Are you sure you want to quarantine the selected account(s)?
+      <br />
+      <br />
+      This will immediately:
+      <ul>
+        <li>Terminate any active leases and revoke leaseholder access</li>
+        <li>Move the account(s) to the Quarantine OU</li>
+        <li>Remove the account(s) from the available account pool</li>
+      </ul>
+      Current leaseholders will immediately lose access. This action cannot be
+      reversed. To return an account to the pool, use &quot;Retry cleanup&quot;
+      or eject and re-onboard the account.
+    </Alert>
+    <BatchActionReview
+      items={selectedAccounts}
+      description={`${selectedAccounts.length} account(s) to quarantine`}
+      columnDefinitions={createColumnDefinitions(false)}
+      identifierKey="awsAccountId"
+      sequential
+      onSubmit={async (account: SandboxAccountView) => {
+        await quarantineAccount(account.awsAccountId);
+        setSelectedAccounts((prev) =>
+          prev.filter((a) => a.awsAccountId !== account.awsAccountId),
+        );
+      }}
+      onSuccess={() => {
+        queryClient.invalidateQueries({
+          queryKey: ["accounts"],
+          refetchType: "all",
+        });
+        queryClient.invalidateQueries({
+          queryKey: ["leases"],
+          refetchType: "all",
+        });
+        showSuccessToast("Account(s) were successfully quarantined.");
+      }}
+      onError={() =>
+        showErrorToast(
+          "One or more accounts failed to quarantine, try resubmitting.",
+          "Failed to quarantine account(s)",
+        )
+      }
+    />
+  </SpaceBetween>
+);
+
 export const ListAccounts = () => {
   // base ui hooks
   const navigate = useNavigate();
@@ -189,19 +299,29 @@ export const ListAccounts = () => {
   // modal hook
   const { showModal } = useModal();
 
+  // query client
+  const queryClient = useQueryClient();
+
   // api hooks
   const { data: accounts, isFetching, refetch } = useGetAccounts();
-  const { mutateAsync: ejectAccount } = useEjectAccount();
-  const { mutateAsync: cleanupAccount } = useCleanupAccount();
+  const { mutateAsync: ejectAccount } = useEjectAccount({
+    skipInvalidation: true,
+  });
+  const { mutateAsync: cleanupAccount } = useCleanupAccount({
+    skipInvalidation: true,
+  });
+  const { mutateAsync: quarantineAccount } = useQuarantineAccount({
+    skipInvalidation: true,
+  });
 
   // state
   const [filter, setFilter] = useState<SandboxAccountStatus>();
-  const [selectedAccounts, setSelectedAccounts] = useState<SandboxAccount[]>(
-    [],
-  );
-  const [filteredAccounts, setFilteredAccounts] = useState<SandboxAccount[]>(
-    [],
-  );
+  const [selectedAccounts, setSelectedAccounts] = useState<
+    SandboxAccountView[]
+  >([]);
+  const [filteredAccounts, setFilteredAccounts] = useState<
+    SandboxAccountView[]
+  >([]);
 
   useEffect(() => {
     setBreadcrumb([
@@ -218,10 +338,34 @@ export const ListAccounts = () => {
   useEffect(() => {
     if (!accounts) return;
 
-    filter
-      ? setFilteredAccounts(accounts.filter((x) => filter === x.status))
-      : setFilteredAccounts(accounts);
+    setFilteredAccounts(
+      filter ? accounts.filter((x) => filter === x.status) : accounts,
+    );
   }, [accounts, filter]);
+
+  // Keep the current selection in sync with the latest account data. Selection
+  // holds account snapshots captured at click time, so after a refetch (eject,
+  // retry cleanup, quarantine, manual refresh, or a background refresh) those
+  // snapshots go stale. Reconciling here ensures the action-enablement logic
+  // and the review popup always reflect each account's current status, and
+  // drops selections for accounts that no longer exist in the pool.
+  useEffect(() => {
+    if (!accounts) return;
+
+    setSelectedAccounts((prev) => {
+      if (prev.length === 0) return prev;
+
+      const accountsById = new Map(
+        accounts.map((account) => [account.awsAccountId, account]),
+      );
+
+      return prev
+        .map((selected) => accountsById.get(selected.awsAccountId))
+        .filter(
+          (account): account is SandboxAccountView => account !== undefined,
+        );
+    });
+  }, [accounts]);
 
   const showEjectModal = () => {
     showModal({
@@ -230,7 +374,8 @@ export const ListAccounts = () => {
         <EjectModalContent
           selectedAccounts={selectedAccounts}
           ejectAccount={ejectAccount}
-          navigate={navigate}
+          queryClient={queryClient}
+          setSelectedAccounts={setSelectedAccounts}
         />
       ),
       size: "max",
@@ -244,7 +389,23 @@ export const ListAccounts = () => {
         <CleanupModalContent
           selectedAccounts={selectedAccounts}
           cleanupAccount={cleanupAccount}
-          navigate={navigate}
+          queryClient={queryClient}
+          setSelectedAccounts={setSelectedAccounts}
+        />
+      ),
+      size: "max",
+    });
+  };
+
+  const showQuarantineModal = () => {
+    showModal({
+      header: "Quarantine Account",
+      content: (
+        <QuarantineModalContent
+          selectedAccounts={selectedAccounts}
+          quarantineAccount={quarantineAccount}
+          queryClient={queryClient}
+          setSelectedAccounts={setSelectedAccounts}
         />
       ),
       size: "max",
@@ -252,12 +413,13 @@ export const ListAccounts = () => {
   };
 
   const handleSelectionChange = ({ detail }: any) => {
-    const accounts = detail.selectedItems as SandboxAccount[];
+    const accounts = detail.selectedItems as SandboxAccountView[];
     setSelectedAccounts(accounts);
   };
 
   return (
     <ContentLayout
+      disablePadding
       header={
         <Header
           variant="h1"
@@ -306,11 +468,31 @@ export const ListAccounts = () => {
                     {
                       text: "Retry cleanup",
                       id: "retryCleanup",
+                      // Every selected account must be in a retryable status
+                      // (Quarantine/CleanUp) AND free of a live cleanup lock —
+                      // a live lock means an execution is already running and
+                      // retrying would race it (an expired lock is the stuck
+                      // case the retry recovers, so it does not block).
+                      disabled: !selectedAccounts.every(
+                        (x) =>
+                          (x.status === "Quarantine" ||
+                            x.status === "CleanUp") &&
+                          !isCleanupLockActive(x),
+                      ),
+                      disabledReason: selectedAccounts.some(isCleanupLockActive)
+                        ? "A cleanup is already running for a selected account. Wait for it to finish before retrying."
+                        : undefined,
+                    },
+                    {
+                      text: "Quarantine account",
+                      id: "quarantine",
                       disabled:
-                        // disable cleanup option unless all selected accounts are in quarantine or cleanup
+                        // disable quarantine option unless all selected accounts are in available, active, or frozen
                         !selectedAccounts.every(
                           (x) =>
-                            x.status === "Quarantine" || x.status === "CleanUp",
+                            x.status === "Available" ||
+                            x.status === "Active" ||
+                            x.status === "Frozen",
                         ),
                     },
                   ]}
@@ -321,6 +503,9 @@ export const ListAccounts = () => {
                         break;
                       case "retryCleanup":
                         showCleanupModal();
+                        break;
+                      case "quarantine":
+                        showQuarantineModal();
                         break;
                     }
                   }}

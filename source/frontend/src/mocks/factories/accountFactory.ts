@@ -2,30 +2,39 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import {
-  SandboxAccount,
-  SandboxAccountSchema,
-} from "@amzn/innovation-sandbox-commons/data/sandbox-account/sandbox-account.js";
-import { generateSchemaData } from "@amzn/innovation-sandbox-commons/test/generate-schema-data.js";
-import { UnregisteredAccount } from "@amzn/innovation-sandbox-frontend/domains/accounts/types";
+  SandboxAccountView,
+  SandboxAccountViewSchema,
+  UnregisteredAccountView,
+} from "@amzn/innovation-sandbox-frontend/domains/accounts/model";
+import { generateSchemaData } from "@amzn/innovation-sandbox-shared/test/generate-schema-data";
 
 export function createSandboxAccount(
-  overrides?: Partial<SandboxAccount>,
-): SandboxAccount {
-  return generateSchemaData(SandboxAccountSchema, overrides);
+  overrides?: Partial<SandboxAccountView>,
+): SandboxAccountView {
+  return generateSchemaData(SandboxAccountViewSchema, overrides);
 }
 
+// The shared fixtures pin resourceLock to undefined: zocker would otherwise
+// randomly generate one (it is optional in the schema), and a randomly-live
+// lock disables the retry-cleanup actions, making tests flaky.
 export const mockAvailableAccount = createSandboxAccount({
   status: "Available",
+  resourceLock: undefined,
 });
-export const mockActiveAccount = createSandboxAccount({ status: "Active" });
+export const mockActiveAccount = createSandboxAccount({
+  status: "Active",
+  resourceLock: undefined,
+});
 export const mockQuarantineAccount = createSandboxAccount({
   status: "Quarantine",
+  resourceLock: undefined,
 });
 export const mockCleanUpAccount = createSandboxAccount({
   status: "CleanUp",
+  resourceLock: undefined,
 });
 
-export const mockUnregisteredAccounts: UnregisteredAccount[] = [
+export const mockUnregisteredAccounts: UnregisteredAccountView[] = [
   {
     Id: "123456789012",
     Email: "test1@example.com",

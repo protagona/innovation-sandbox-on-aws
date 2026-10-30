@@ -2,186 +2,67 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { screen } from "@testing-library/react";
-import { BrowserRouter as Router } from "react-router-dom";
-import { describe, expect, test } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { LeaseStatus } from "@amzn/innovation-sandbox-commons/data/lease/lease";
 import { LeaseSummary } from "@amzn/innovation-sandbox-frontend/domains/leases/components/LeaseSummary";
-import { getLeaseStatusDisplayName } from "@amzn/innovation-sandbox-frontend/domains/leases/helpers";
-import {
-  createActiveLease,
-  createExpiredLease,
-  createLease,
-  createPendingLease,
-} from "@amzn/innovation-sandbox-frontend/mocks/factories/leaseFactory";
+import { MonitoredLeaseView } from "@amzn/innovation-sandbox-frontend/domains/leases/model";
+import { createActiveLease } from "@amzn/innovation-sandbox-frontend/mocks/factories/leaseFactory";
 import { renderWithQueryClient } from "@amzn/innovation-sandbox-frontend/setupTests";
-import moment from "moment";
 
-describe("LeaseSummary", () => {
-  const renderComponent = (lease: any) =>
-    renderWithQueryClient(
-      <Router>
-        <LeaseSummary lease={lease} />
-      </Router>,
-    );
+const lease: MonitoredLeaseView = createActiveLease({
+  costReportGroup: "engineering-team",
+  budgetThresholds: [{ dollarsSpent: 50, action: "FREEZE_ACCOUNT" }],
+  durationThresholds: [{ hoursRemaining: 24, action: "ALERT" }],
+});
 
-  test("renders active lease details correctly", () => {
-    const activeLease = createActiveLease({
-      status: "Active",
-      approvedBy: "approver@example.com",
-      totalCostAccrued: 500,
-      maxSpend: 1000,
-      costReportGroup: "finance-team-a",
-    });
+describe("LeaseSummary admin-field visibility", () => {
+  describe("admin view (showAdminFields={true})", () => {
+    it("shows Cost Report Settings, Last Monitored, and threshold sections", () => {
+      renderWithQueryClient(
+        <LeaseSummary lease={lease} showAdminFields={true} />,
+      );
 
-    renderComponent(activeLease);
-
-    expect(screen.getByText("Lease Summary")).toBeInTheDocument();
-    expect(screen.getByText(activeLease.uuid)).toBeInTheDocument();
-    expect(screen.getByText(activeLease.awsAccountId)).toBeInTheDocument();
-    expect(
-      screen.getByText(activeLease.originalLeaseTemplateName),
-    ).toBeInTheDocument();
-    expect(screen.getByText(activeLease.userEmail)).toBeInTheDocument();
-    expect(screen.getByText("approver@example.com")).toBeInTheDocument();
-    expect(screen.getByText("Active")).toBeInTheDocument();
-    expect(screen.getByText("finance-team-a")).toBeInTheDocument();
-  });
-
-  test("handles lease without max spend", () => {
-    const leaseWithoutMaxSpend = createActiveLease({
-      maxSpend: undefined,
-      status: "Active",
-    });
-    renderComponent(leaseWithoutMaxSpend);
-
-    expect(screen.getByText("No max budget")).toBeInTheDocument();
-  });
-
-  test("renders correctly for different lease statuses", () => {
-    const statuses: LeaseStatus[] = [
-      "Active",
-      "Frozen",
-      "Expired",
-      "BudgetExceeded",
-      "ManuallyTerminated",
-    ];
-
-    statuses.forEach((status) => {
-      const lease = createLease({ status });
-      const { unmount } = renderComponent(lease);
-
-      expect(
-        screen.getByText(getLeaseStatusDisplayName(status)),
-      ).toBeInTheDocument();
-      unmount();
+      expect(screen.getByText("Cost Report Settings")).toBeInTheDocument();
+      expect(screen.getByText("Last Monitored")).toBeInTheDocument();
+      expect(screen.getByText("Budget Thresholds")).toBeInTheDocument();
+      expect(screen.getByText("Duration Thresholds")).toBeInTheDocument();
     });
   });
 
-  test("displays auto-approved status correctly", () => {
-    const autoApprovedLease = createActiveLease({
-      approvedBy: "AUTO_APPROVED",
+  describe("default (no showAdminFields prop)", () => {
+    it("hides admin fields, failing safe when a consumer forgets the prop", () => {
+      renderWithQueryClient(<LeaseSummary lease={lease} />);
+      expect(screen.queryByText("Last Monitored")).not.toBeInTheDocument();
+      expect(screen.queryByText("Budget Thresholds")).not.toBeInTheDocument();
+      expect(screen.queryByText("Duration Thresholds")).not.toBeInTheDocument();
     });
-    renderComponent(autoApprovedLease);
-    expect(screen.getByText("Auto Approved")).toBeInTheDocument();
   });
 
-  test("renders pending lease details correctly", () => {
-    const pendingLease = createPendingLease({
-      status: "PendingApproval",
-      comments: "Please approve this lease",
+  describe("user view (showAdminFields={false})", () => {
+    it("hides the Last Monitored row", () => {
+      renderWithQueryClient(
+        <LeaseSummary lease={lease} showAdminFields={false} />,
+      );
+
+      expect(screen.queryByText("Last Monitored")).not.toBeInTheDocument();
     });
 
-    renderComponent(pendingLease);
+    it("hides the Budget and Duration Thresholds sections", () => {
+      renderWithQueryClient(
+        <LeaseSummary lease={lease} showAdminFields={false} />,
+      );
 
-    expect(screen.getByText("Lease Summary")).toBeInTheDocument();
-    expect(screen.getByText(pendingLease.uuid)).toBeInTheDocument();
-    expect(
-      screen.getByText(pendingLease.originalLeaseTemplateName),
-    ).toBeInTheDocument();
-    expect(screen.getByText(pendingLease.userEmail)).toBeInTheDocument();
-    expect(screen.getByText("Pending Approval")).toBeInTheDocument();
-    expect(screen.getByText("Please approve this lease")).toBeInTheDocument();
-  });
-
-  test.each([
-    {
-      description: "createdBy exists",
-      createdBy: "admin@example.com",
-      userEmail: "user@example.com",
-      expectedCreatedBy: "admin@example.com",
-    },
-    {
-      description: "createdBy does not exist",
-      createdBy: undefined,
-      userEmail: "different-user@example.com",
-      expectedCreatedBy: "different-user@example.com",
-    },
-  ])(
-    "renders Created By field correctly when $description",
-    ({ createdBy, userEmail, expectedCreatedBy }) => {
-      const lease = createActiveLease({
-        createdBy: createdBy as any,
-        userEmail,
-      });
-
-      renderComponent(lease);
-
-      expect(screen.getByText("Created By")).toBeInTheDocument();
-
-      const createdByElements = screen.getAllByText(expectedCreatedBy);
-      expect(createdByElements.length).toBeGreaterThan(0);
-    },
-  );
-
-  test("displays cost report group when assigned", () => {
-    const leaseWithCostReportGroup = createActiveLease({
-      costReportGroup: "marketing-team-b",
+      expect(screen.queryByText("Budget Thresholds")).not.toBeInTheDocument();
+      expect(screen.queryByText("Duration Thresholds")).not.toBeInTheDocument();
     });
 
-    renderComponent(leaseWithCostReportGroup);
+    it("still shows Budget Status and Lease Expiry", () => {
+      renderWithQueryClient(
+        <LeaseSummary lease={lease} showAdminFields={false} />,
+      );
 
-    expect(screen.getByText("Cost Report Group")).toBeInTheDocument();
-    expect(screen.getByText("marketing-team-b")).toBeInTheDocument();
-  });
-
-  test("displays 'Not assigned' when cost report group is not set", () => {
-    const leaseWithoutCostReportGroup = createActiveLease({
-      costReportGroup: undefined,
+      expect(screen.getByText("Budget Status")).toBeInTheDocument();
+      expect(screen.getByText("Lease Expiry")).toBeInTheDocument();
     });
-
-    renderComponent(leaseWithoutCostReportGroup);
-
-    expect(screen.getByText("Cost Report Group")).toBeInTheDocument();
-    expect(screen.getByText("Not assigned")).toBeInTheDocument();
   });
-
-  test.each([
-    { amount: 1, unit: "hours", expected: "an hour ago" },
-    { amount: 3, unit: "hours", expected: "3 hours ago" },
-    { amount: 1, unit: "days", expected: "a day ago" },
-    { amount: 3, unit: "days", expected: "3 days ago" },
-    { amount: 1, unit: "months", expected: "a month ago" },
-  ])(
-    "displays proper expiry date for expired lease - $expected",
-    ({ amount, unit, expected }) => {
-      const expirationDate = moment()
-        .subtract(amount, unit as any)
-        .toISOString();
-      const expiredLease = createExpiredLease({
-        endDate: expirationDate,
-        // Ensure startDate and lastCheckedDate are different to avoid duplicates
-        startDate: moment()
-          .subtract(amount + 1, unit as any)
-          .toISOString(),
-        lastCheckedDate: moment()
-          .subtract(amount + 1, unit as any)
-          .toISOString(),
-      });
-
-      renderComponent(expiredLease);
-
-      expect(screen.getByText(expected)).toBeInTheDocument();
-    },
-  );
 });

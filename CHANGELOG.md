@@ -5,6 +5,484 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.6] - 2026-10-20
+
+### Security
+
+- Upgraded `brace-expansion` to mitigate:
+  - [CVE-2026-102276](https://nvd.nist.gov/vuln/detail/CVE-2026-102276) — denial of service via uncontrolled recursion in nested brace groups
+  - [CVE-2026-102277](https://nvd.nist.gov/vuln/detail/CVE-2026-102277) — denial of service via quadratic-time brace expansion
+  - [CVE-2026-102278](https://nvd.nist.gov/vuln/detail/CVE-2026-102278) — denial of service via stack exhaustion from nested brace patterns
+- Upgraded the Go toolchain used to build the account cleaner container image from 1.26.6 to 1.26.9 to mitigate:
+  - [CVE-2026-56857](https://nvd.nist.gov/vuln/detail/CVE-2026-56857)
+  - [CVE-2026-78663](https://nvd.nist.gov/vuln/detail/CVE-2026-78663)
+  - [CVE-2026-56866](https://nvd.nist.gov/vuln/detail/CVE-2026-56866)
+  - [CVE-2026-78659](https://nvd.nist.gov/vuln/detail/CVE-2026-78659)
+  - [CVE-2026-78660](https://nvd.nist.gov/vuln/detail/CVE-2026-78660)
+  - [CVE-2026-78667](https://nvd.nist.gov/vuln/detail/CVE-2026-78667)
+  - [CVE-2026-78669](https://nvd.nist.gov/vuln/detail/CVE-2026-78669)
+  - [CVE-2026-94439](https://nvd.nist.gov/vuln/detail/CVE-2026-94439)
+  - [CVE-2026-94440](https://nvd.nist.gov/vuln/detail/CVE-2026-94440)
+  - [CVE-2026-97031](https://nvd.nist.gov/vuln/detail/CVE-2026-97031)
+  - [CVE-2026-97032](https://nvd.nist.gov/vuln/detail/CVE-2026-97032)
+  - [CVE-2026-94448](https://nvd.nist.gov/vuln/detail/CVE-2026-94448)
+  - [CVE-2026-97030](https://nvd.nist.gov/vuln/detail/CVE-2026-97030)
+- Updated the account cleaner container base image (`amazonlinux:2023-minimal`) to the latest digest to pick up upstream operating system package fixes
+
+### Changed
+
+- Updated `aws-nuke` from 3.67.0 to 3.68.3, adding Security Hub V2 cleanup and improved handling of AWS-managed EventBridge and ElastiCache resources
+- Refreshed transitive npm dependencies and removed overrides that are no longer required
+
+### Fixed
+
+- Removed the unused API Gateway cache cluster and its associated security-rule suppression, avoiding cache-cluster cost when API response caching is disabled ([#204](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/204))
+
+## [1.3.5] - 2026-10-07
+
+### Fixed
+
+- Corrected legacy Cost Explorer pagination so lease cost totals accumulate across every `GetCostAndUsage` page instead of only the final page, preventing undercounted spend for leases on the pre-tagging fallback path
+- Suppressed redundant freeze alerts for leases that are already Frozen; the lifecycle handler previously rejected those events because only Active leases can freeze, causing unnecessary retries and allowing a freeze threshold to shadow an eligible ordinary alert
+- Extended the lease-monitoring Lambda timeout to 15 minutes so large catch-up cohorts can complete a full scan
+
+### Security
+
+- Pinned `source-map-js` and `postcss-selector-parser` to their patched versions
+
+## [1.3.4] - 2026-10-01
+
+### Security
+
+- Upgraded `brace-expansion` to mitigate:
+  - [CVE-2026-102276](https://nvd.nist.gov/vuln/detail/CVE-2026-102276) — denial of service via stack exhaustion from crafted brace patterns
+  - [CVE-2026-102278](https://nvd.nist.gov/vuln/detail/CVE-2026-102278) — denial of service via uncontrolled recursion in nested brace patterns
+- Upgraded `fast-uri` to mitigate:
+  - [CVE-2026-84292](https://nvd.nist.gov/vuln/detail/CVE-2026-84292) — authority injection via unvalidated port serialization
+  - [CVE-2026-84394](https://nvd.nist.gov/vuln/detail/CVE-2026-84394) — host confusion via unbalanced URI brackets, bypassing security policies
+- Updated `amazonlinux:2023-minimal` base image digest to mitigate:
+  - `curl-minimal`, `libcurl-minimal`:
+    - [CVE-2026-80230](https://nvd.nist.gov/vuln/detail/CVE-2026-80230)
+  - `pcre2`, `pcre2-syntax`:
+    - [CVE-2026-89161](https://nvd.nist.gov/vuln/detail/CVE-2026-89161)
+  - `rpm`, `rpm-libs`:
+    - [CVE-2026-78367](https://nvd.nist.gov/vuln/detail/CVE-2026-78367)
+    - [CVE-2026-84233](https://nvd.nist.gov/vuln/detail/CVE-2026-84233)
+
+### Fixed
+
+- Restored email notification delivery for deployments whose Amazon SES sending identity has a default configuration set, by authorizing `ses:SendEmail` against configuration set resources in addition to the sender identity ([#195](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/195))
+- Logged Amazon SES authorization failures once and surfaced them immediately, instead of retrying against progressively smaller recipient batches and logging one failure per recipient
+- Prevented sandbox users from tagging AWS Config resources with case variants of the AWS Control Tower management tag key, which could make those resources appear Control Tower-managed and block account cleanup and account reuse
+- Excluded the AWS-managed Amazon ElastiCache defaults `default.iam-user` and `default.iam-user-group` from account cleanup and post-cleanup validation, so that AWS rejecting the delete calls for these identifiers no longer ends the cleanup run in a failed state
+
+## [1.3.3] - 2026-09-21
+
+### Added
+
+- Added a global setting to allow or deny new IAM Identity Center group assignments while preserving existing group assignments
+- Increased the number of searchable cost report groups to 250 and added filtering to the lease template cost group selector ([#186](https://github.com/aws-solutions/innovation-sandbox-on-aws/pull/186))
+- Added an AWS CLI-compatible service model and installer for using Innovation Sandbox operations through `aws isb`
+- Added support for creating and cleaning up Amazon S3 Files resources in sandbox accounts ([#162](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/162))
+
+### Changed
+
+- Defined the HTTP API with Smithy and generated the server adapters, TypeScript client, OpenAPI document, and AWS CLI model from the shared contract
+- Updated `aws-nuke` from 3.66.0 to 3.67.0 and refreshed the Amazon Linux 2023 minimal account cleaner base image
+
+### Fixed
+
+- Prevented customer-managed service roles from being blocked by the write-protection SCP during account cleanup ([#189](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/189))
+- Ensured M2M client stack deployments refresh the API endpoint after the compute stack replaces the REST API
+- Forwarded additional principal exceptions and Amazon Bedrock inference profile patterns through `scripts/cdk/deploy.sh` for CDK deployments of the Account Pool stack
+- Corrected lease visibility and access while leases are provisioning
+- Prevented table action buttons from wrapping
+
+## [1.3.2] - 2026-09-11
+
+### Security
+
+- Updated the account cleaner container base image (`amazonlinux:2023-minimal`) to the latest digest to pick up upstream operating system package fixes
+
+### Fixed
+
+- Included the ECR image tag manifest in the open-source distribution so source builds can validate and apply the release image tags
+- Corrected the `AccountCleanupLogs` CloudWatch Logs Insights saved query, which asked for an account cleaner state machine execution ID that no longer exists. The query now names the AWS CodeBuild build ID that scopes the AWS Nuke logs for a cleanup
+- Removed a dead `StateMachineExecutionId` line from the account cleaner buildspec, which logged an empty value on every cleanup build
+
+## [1.3.1] - 2026-09-03
+
+### Fixed
+
+- Restored the API WAF allow-list to match on the originating client IP, resolving legitimate requests being incorrectly blocked when the solution is fronted by CloudFront
+- Corrected the account cleaner container image tag (`v1.2` → `v1.3`) so account cleanup runs on the image built for this release
+- Aligned account cleanup structured logging so execution metadata and structured fields reach the log root without losing durable-execution replay suppression
+
+### Changed
+
+- Refreshed transitive npm dependencies to their latest compatible versions (no declared version ranges changed)
+
+## [1.3.0] - 2026-08-26
+
+### Added
+
+- Multi-user lease sharing enabling collaborative access to sandbox accounts with support for individual users and IAM Identity Center groups ([#15](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/15), [#77](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/77), [#89](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/89))
+- In-app configuration management replacing AWS AppConfig with a DynamoDB-backed Admin Settings UI, with automated migration on upgrade
+- Amazon Cognito authentication with SigV4 request signing, replacing the custom SAML + self-signed JWT implementation
+- Machine-to-machine (M2M) API access via per-client IAM roles with CloudTrail audit trail and CLI helper scripts (`scripts/m2m/`) ([#19](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/19))
+- Post-cleanup resource validation using AWS Resource Explorer to detect residual resources before account reuse
+- Configurable account cooldown period after cleanup to ensure cost data settlement before reuse ([#70](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/70))
+- Cleanup summary reports visible in the UI showing per-stage outcomes and execution history
+- Account tagging for native AWS cost allocation, enabling Cost Explorer, Budgets, and Cost Anomaly Detection analysis by user, team, and lease template
+- SCP customization parameters (`AdditionalAllowedServices`, `AdditionalPrincipalExceptions`, `BedrockInferenceProfilePatterns`) that persist across upgrades ([#74](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/74), [#83](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/83), [#39](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/39))
+- 18 new services added to the baseline allowed services SCP including `sts:*`, `ssm-guiconnect:*`, `execute-api:*`, `ecr-public:*`, `eks-auth:*`, Bedrock AgentCore, S3 Tables, S3 Vectors, and Textract ([#59](https://github.com/aws-solutions/innovation-sandbox-on-aws/pull/59) @YutaOkoshi, [#67](https://github.com/aws-solutions/innovation-sandbox-on-aws/pull/67) @marcpeiser, [#73](https://github.com/aws-solutions/innovation-sandbox-on-aws/pull/73) @chrisns, [#163](https://github.com/aws-solutions/innovation-sandbox-on-aws/pull/163) @ia9, [#81](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/81), [#109](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/109))
+- Manual account quarantine allowing administrators to temporarily isolate accounts from the UI ([#85](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/85))
+- User self-service lease termination from the lease details page ([#33](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/33))
+- Custom domain support for CloudFront with BYO ACM certificate ([#65](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/65))
+- Support for multiple Innovation Sandbox deployments within the same AWS Organization via namespaced global resources ([#14](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/14))
+
+### Fixed
+
+- Account cleanup now passes the ISB spoke role to CloudFormation during stack deletion, resolving failures on stacks deployed with a creation role ([#118](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/118))
+- Account cleanup no longer fails when AWS Security Incident Response is enabled in sandbox accounts ([#101](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/101))
+- Concurrent cleanup executions no longer spuriously quarantine accounts
+- Email notifications render properly formatted HTML anchor tags
+- Fixed stale data displayed in UI after state changes
+
+### Changed
+
+- For deployments with customized AWS Nuke filters, updating from a version earlier than v1.3.0 activates the packaged AWS Nuke configuration instead of the customized version (**breaking**). Before updating, save the active version. After an update or rollback, verify the active version and redeploy the intended version if they differ. See [Preserve AWS Nuke configuration customizations](https://docs.aws.amazon.com/solutions/latest/innovation-sandbox-on-aws/update-the-solution.html#v1-3-0-preserve-nuke-config). ([#193](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/193))
+- Authentication mechanism migrated from custom SAML + self-signed JWT to Amazon Cognito with SigV4 (**breaking** — post-deployment SAML app reconfiguration required; see [upgrade guide](https://docs.aws.amazon.com/solutions/latest/innovation-sandbox-on-aws/update-the-solution.html))
+
+### Removed
+
+- Amazon CloudWatch Application Insights integration
+- AppConfig extension from all non-nuke Lambda functions
+- Custom JWT secret rotation Lambda and Secrets Manager secret
+- SSO Handler Lambda (replaced by Cognito hosted UI)
+- Amazon Lex V1 from the allowed services SCP
+
+### Security
+
+- API Gateway authorization migrated to IAM (SigV4)
+
+## [1.2.17] - 2026-08-18
+
+### Security
+
+- Upgraded `aws-cdk-lib` to 2.265.0, which refreshes its bundled `brace-expansion` to 5.0.9, to mitigate:
+  - [CVE-2026-69152](https://nvd.nist.gov/vuln/detail/CVE-2026-69152) — denial of service via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation
+- Upgraded the Go toolchain used to build the `innovation-sandbox-on-aws-account-cleaner` container image from 1.26.5 to 1.26.6, rebuilding `aws-nuke` against a patched Go standard library to mitigate:
+  - [CVE-2026-39821](https://nvd.nist.gov/vuln/detail/CVE-2026-39821) — validation bypass / privilege escalation from failure to reject ASCII-only Punycode-encoded labels
+  - [CVE-2026-33818](https://nvd.nist.gov/vuln/detail/CVE-2026-33818) — stack exhaustion in `encoding/asn1` when parsing deeply nested structures
+  - [CVE-2026-46600](https://nvd.nist.gov/vuln/detail/CVE-2026-46600) — panic when parsing invalid SVCB/HTTPS DNS records
+  - [CVE-2026-56853](https://nvd.nist.gov/vuln/detail/CVE-2026-56853) — missing `ReadHeaderTimeout` on the unencrypted HTTP/2 preface check in `net/http`
+  - [CVE-2026-56859](https://nvd.nist.gov/vuln/detail/CVE-2026-56859) — stack exhaustion in `encoding/xml` from a reset recursion-depth counter
+  - [CVE-2026-56862](https://nvd.nist.gov/vuln/detail/CVE-2026-56862) — unbounded post-handshake key derivation in `crypto/tls`
+
+## [1.2.16] - 2026-08-10
+
+### Security
+
+- Upgraded `brace-expansion` to mitigate:
+  - [CVE-2026-14257](https://nvd.nist.gov/vuln/detail/CVE-2026-14257) — denial of service via malformed expansion input
+- Upgraded `fast-uri` to mitigate:
+  - [CVE-2026-18446](https://nvd.nist.gov/vuln/detail/CVE-2026-18446) — host confusion via backslash in URI authority
+- Upgraded `js-yaml` to mitigate:
+  - [GHSA-5p4m-2wfm-xmqj](https://github.com/advisories/GHSA-5p4m-2wfm-xmqj) — quadratic CPU consumption in `!!omap` resolution
+- Upgraded `nanoid` to mitigate:
+  - [CVE-2026-67213](https://nvd.nist.gov/vuln/detail/CVE-2026-67213) — infinite loop in the custom alphabet code path
+- Upgraded `pyasn1` in the AWS CLI Lambda layer via an `@aws-cdk/asset-awscli-v1` override to mitigate:
+  - [CVE-2026-59884](https://nvd.nist.gov/vuln/detail/CVE-2026-59884)
+  - [CVE-2026-59885](https://nvd.nist.gov/vuln/detail/CVE-2026-59885)
+  - [CVE-2026-59886](https://nvd.nist.gov/vuln/detail/CVE-2026-59886)
+- Updated `amazonlinux:2023-minimal` base image digest to mitigate:
+  - `gawk`:
+    - [CVE-2026-40467](https://nvd.nist.gov/vuln/detail/CVE-2026-40467)
+    - [CVE-2026-40553](https://nvd.nist.gov/vuln/detail/CVE-2026-40553)
+  - `glib2`:
+    - [CVE-2026-16118](https://nvd.nist.gov/vuln/detail/CVE-2026-16118)
+  - `python3`, `python3-libs`, `python-unversioned-command`:
+    - [CVE-2026-15308](https://nvd.nist.gov/vuln/detail/CVE-2026-15308)
+  - `rpm`, `rpm-libs`:
+    - [CVE-2026-44605](https://nvd.nist.gov/vuln/detail/CVE-2026-44605)
+
+## [1.2.15] - 2026-07-28
+
+### Security
+
+- Upgraded `postcss` to mitigate:
+  - [GHSA-r28c-9q8g-f849](https://github.com/advisories/GHSA-r28c-9q8g-f849) — path traversal in previous source map auto-loading (`sourceMappingURL`) leading to arbitrary `.map` file disclosure
+- Refreshed npm dependencies to their latest in-range versions.
+- Updated `amazonlinux:2023-minimal` base image digest to the latest available (routine hygiene; no outstanding high/critical OS CVEs).
+
+### Fixed
+
+- Updated `TagEditorField` to accommodate the `FieldArray` value/type export change introduced in `react-hook-form` 7.83.
+
+## [1.2.14] - 2026-07-24
+
+### Security
+
+- Updated `amazonlinux:2023-minimal` base image digest to mitigate:
+  - `python3`, `python-unversioned-command`, `python3-libs`:
+    - [CVE-2026-0864](https://nvd.nist.gov/vuln/detail/CVE-2026-0864)
+    - [CVE-2026-3276](https://nvd.nist.gov/vuln/detail/CVE-2026-3276)
+    - [CVE-2026-9669](https://nvd.nist.gov/vuln/detail/CVE-2026-9669)
+    - [CVE-2026-11940](https://nvd.nist.gov/vuln/detail/CVE-2026-11940)
+    - [CVE-2026-11972](https://nvd.nist.gov/vuln/detail/CVE-2026-11972)
+  - `krb5-libs`:
+    - [CVE-2026-11850](https://nvd.nist.gov/vuln/detail/CVE-2026-11850)
+  - `libacl`:
+    - [CVE-2026-54369](https://nvd.nist.gov/vuln/detail/CVE-2026-54369)
+    - [CVE-2026-54370](https://nvd.nist.gov/vuln/detail/CVE-2026-54370)
+  - `glib2`:
+    - [CVE-2026-58010](https://nvd.nist.gov/vuln/detail/CVE-2026-58010)
+    - [CVE-2026-58011](https://nvd.nist.gov/vuln/detail/CVE-2026-58011)
+    - [CVE-2026-58012](https://nvd.nist.gov/vuln/detail/CVE-2026-58012)
+    - [CVE-2026-58013](https://nvd.nist.gov/vuln/detail/CVE-2026-58013)
+    - [CVE-2026-58014](https://nvd.nist.gov/vuln/detail/CVE-2026-58014)
+    - [CVE-2026-58015](https://nvd.nist.gov/vuln/detail/CVE-2026-58015)
+    - [CVE-2026-58016](https://nvd.nist.gov/vuln/detail/CVE-2026-58016)
+- Upgraded `aws-cdk-lib` to v2.262.0 to mitigate:
+  - [CVE-2026-13760](https://nvd.nist.gov/vuln/detail/CVE-2026-13760) — OS Command Injection in NodejsFunction Docker Bundling
+  - [CVE-2026-45149](https://nvd.nist.gov/vuln/detail/CVE-2026-45149) — DoS due to excessive memory allocation when expanding large numeric ranges (`brace-expansion`)
+  - [CVE-2026-13149](https://nvd.nist.gov/vuln/detail/CVE-2026-13149) — DoS due to exponential-time complexity (`brace-expansion`)
+- Upgraded `fast-uri` to mitigate:
+  - [CVE-2026-13676](https://nvd.nist.gov/vuln/detail/CVE-2026-13676) — host confusion via failed IDN canonicalization
+  - [CVE-2026-16221](https://nvd.nist.gov/vuln/detail/CVE-2026-16221) — host confusion via literal backslash authority delimiter
+- Upgraded `immutable` to mitigate:
+  - [CVE-2026-59879](https://nvd.nist.gov/vuln/detail/CVE-2026-59879) — `List` 32-bit trie overflow → unrecoverable DoS
+  - [CVE-2026-59880](https://nvd.nist.gov/vuln/detail/CVE-2026-59880) — Hash-collision algorithmic complexity DoS in `Map`/`Set`
+- Upgraded `js-yaml` to mitigate:
+  - [CVE-2026-59869](https://nvd.nist.gov/vuln/detail/CVE-2026-59869) — DoS via crafted YAML documents
+- Upgraded `body-parser` to mitigate:
+  - [CVE-2026-12590](https://nvd.nist.gov/vuln/detail/CVE-2026-12590) — denial of service when invalid `limit` value silently disables size enforcement
+- Upgraded `esbuild` to mitigate:
+  - [GHSA-g7r4-m6w7-qqqr](https://github.com/advisories/GHSA-g7r4-m6w7-qqqr) — arbitrary file read when running dev server on Windows
+
+## [1.2.13] - 2026-07-14
+
+### Security
+
+- Updated amazonlinux base image digest to mitigate:
+  - `sqlite-libs`:
+    - [CVE-2026-11822](https://nvd.nist.gov/vuln/detail/CVE-2026-11822)
+    - [CVE-2026-11824](https://nvd.nist.gov/vuln/detail/CVE-2026-11824)
+  - `expat`:
+    - [CVE-2026-56132](https://nvd.nist.gov/vuln/detail/CVE-2026-56132)
+    - [CVE-2026-56403](https://nvd.nist.gov/vuln/detail/CVE-2026-56403)
+    - [CVE-2026-56406](https://nvd.nist.gov/vuln/detail/CVE-2026-56406)
+    - [CVE-2026-56407](https://nvd.nist.gov/vuln/detail/CVE-2026-56407)
+  - `libblkid`, `libmount`, `libuuid`, `util-linux-core`:
+    - [CVE-2026-53615](https://nvd.nist.gov/vuln/detail/CVE-2026-53615)
+  - `libxml2`:
+    - [CVE-2026-6653](https://nvd.nist.gov/vuln/detail/CVE-2026-6653)
+  - `python3`, `python-unversioned-command`:
+    - [CVE-2026-8328](https://nvd.nist.gov/vuln/detail/CVE-2026-8328)
+    - [CVE-2026-3446](https://nvd.nist.gov/vuln/detail/CVE-2026-3446)
+    - [CVE-2026-7210](https://nvd.nist.gov/vuln/detail/CVE-2026-7210)
+- Upgraded `aws-nuke` to v3.65.0 to mitigate:
+  - [CVE-2026-39822](https://nvd.nist.gov/vuln/detail/CVE-2026-39822) (go/stdlib)
+  - [CVE-2026-42505](https://nvd.nist.gov/vuln/detail/CVE-2026-42505) (go/stdlib)
+- Upgraded `js-yaml` to mitigate [CVE-2026-53550](https://nvd.nist.gov/vuln/detail/CVE-2026-53550)
+
+## [1.2.12] - 2026-06-26
+
+### Security
+
+- Updated amazonlinux base image digest to mitigate:
+  - [CVE-2026-42504](https://nvd.nist.gov/vuln/detail/CVE-2026-42504) (golang)
+  - [CVE-2026-49839](https://nvd.nist.gov/vuln/detail/CVE-2026-49839) (jq)
+  - `openssl-libs`, `openssl-fips-provider-latest`:
+    - [CVE-2026-34181](https://nvd.nist.gov/vuln/detail/CVE-2026-34181)
+    - [CVE-2026-34182](https://nvd.nist.gov/vuln/detail/CVE-2026-34182)
+    - [CVE-2026-34183](https://nvd.nist.gov/vuln/detail/CVE-2026-34183)
+    - [CVE-2026-42768](https://nvd.nist.gov/vuln/detail/CVE-2026-42768)
+    - [CVE-2026-45445](https://nvd.nist.gov/vuln/detail/CVE-2026-45445)
+    - [CVE-2026-45447](https://nvd.nist.gov/vuln/detail/CVE-2026-45447)
+  - [CVE-2026-8643](https://nvd.nist.gov/vuln/detail/CVE-2026-8643) (python3-pip, python3-pip-wheel)
+- Added `form-data` override and upgraded `vite` to mitigate:
+  - [CVE-2026-12143](https://nvd.nist.gov/vuln/detail/CVE-2026-12143) (form-data)
+  - [CVE-2026-53571](https://nvd.nist.gov/vuln/detail/CVE-2026-53571) (vite)
+
+## [1.2.11] - 2026-06-15
+
+### Fixed
+
+- BudgetProgressBar rendered an incorrect fill width; replaced the custom progress bar with the Cloudscape `ProgressBar` component ([#147](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/147))
+
+### Security
+
+- Upgraded `react-router` and `react-router-dom` to mitigate [CVE-2026-40181](https://nvd.nist.gov/vuln/detail/CVE-2026-40181)
+- Updated amazonlinux base image digest to mitigate:
+  - `jq`:
+    - [CVE-2026-32316](https://nvd.nist.gov/vuln/detail/CVE-2026-32316)
+    - [CVE-2026-33947](https://nvd.nist.gov/vuln/detail/CVE-2026-33947)
+    - [CVE-2026-33948](https://nvd.nist.gov/vuln/detail/CVE-2026-33948)
+    - [CVE-2026-39956](https://nvd.nist.gov/vuln/detail/CVE-2026-39956)
+    - [CVE-2026-39979](https://nvd.nist.gov/vuln/detail/CVE-2026-39979)
+    - [CVE-2026-40164](https://nvd.nist.gov/vuln/detail/CVE-2026-40164)
+    - [CVE-2026-43894](https://nvd.nist.gov/vuln/detail/CVE-2026-43894)
+    - [CVE-2026-43896](https://nvd.nist.gov/vuln/detail/CVE-2026-43896)
+  - `libsolv`:
+    - [CVE-2026-48863](https://nvd.nist.gov/vuln/detail/CVE-2026-48863)
+    - [CVE-2026-48864](https://nvd.nist.gov/vuln/detail/CVE-2026-48864)
+    - [CVE-2026-9149](https://nvd.nist.gov/vuln/detail/CVE-2026-9149)
+    - [CVE-2026-9150](https://nvd.nist.gov/vuln/detail/CVE-2026-9150)
+  - `perl-HTTP-Tiny`: [CVE-2026-7010](https://nvd.nist.gov/vuln/detail/CVE-2026-7010)
+  - `perl` (and related modules): [CVE-2026-8376](https://nvd.nist.gov/vuln/detail/CVE-2026-8376)
+  - `python3`, `python3-libs`, `python-unversioned-command`: [CVE-2026-6019](https://nvd.nist.gov/vuln/detail/CVE-2026-6019)
+
+## [1.2.10] - 2026-05-28
+
+### Security
+
+- Upgraded `js-cookie` to mitigate [CVE-2026-46625](https://github.com/advisories/GHSA-qjx8-664m-686j)
+- Upgraded `uuid` to mitigate [CVE-2026-41907](https://nvd.nist.gov/vuln/detail/CVE-2026-41907)
+- Updated amazonlinux base image digest
+
+## [1.2.9] - 2026-05-14
+
+### Security
+
+- Upgraded `fast-uri` to mitigate
+  - [CVE-2026-6321](https://nvd.nist.gov/vuln/detail/CVE-2026-6321)
+  - [CVE-2026-6322](https://nvd.nist.gov/vuln/detail/CVE-2026-6322)
+
+## [1.2.8] - 2026-05-08
+
+### Fixed
+
+- Allow lease termination and freeze when user is deleted from IDC
+
+### Security
+
+- Updated amazonlinux base image digest to mitigate:
+  - [CVE-2026-4046](https://nvd.nist.gov/vuln/detail/CVE-2026-4046) (glibc, glibc-common, glibc-minimal-langpack)
+  - [CVE-2026-4786](https://nvd.nist.gov/vuln/detail/CVE-2026-4786) (python3, python3-libs, python-unversioned-command)
+  - [CVE-2026-6100](https://nvd.nist.gov/vuln/detail/CVE-2026-6100) (python3, python3-libs, python-unversioned-command)
+
+## [1.2.7] - 2026-04-27
+
+### Security
+
+- Upgraded `@xmldom/xmldom` to mitigate:
+  - [CVE-2026-41672](https://github.com/advisories/GHSA-j759-j44w-7fr8)
+  - [CVE-2026-41673](https://github.com/advisories/GHSA-2v35-w6hq-6mfw)
+  - [CVE-2026-41674](https://github.com/advisories/GHSA-f6ww-3ggp-fr8h)
+  - [CVE-2026-41675](https://github.com/advisories/GHSA-x6wf-f3px-wcqx)
+- Upgraded `fast-xml-parser` to mitigate [CVE-2026-41650](https://github.com/advisories/GHSA-gh4j-gqv2-49f6)
+
+## [1.2.6] - 2026-04-17
+
+### Security
+
+- Upgraded `libnghttp2` to mitigate [CVE-2026-27135](https://nvd.nist.gov/vuln/detail/CVE-2026-27135)
+- Upgraded `openssl-fips-provider-latest` to mitigate:
+  - [CVE-2026-28387](https://nvd.nist.gov/vuln/detail/CVE-2026-28387)
+  - [CVE-2026-31790](https://nvd.nist.gov/vuln/detail/CVE-2026-31790)
+- Upgraded `openssl-libs` to mitigate:
+  - [CVE-2026-28387](https://nvd.nist.gov/vuln/detail/CVE-2026-28387)
+  - [CVE-2026-31790](https://nvd.nist.gov/vuln/detail/CVE-2026-31790)
+- Upgraded `python-unversioned-command` to mitigate [CVE-2026-4519](https://nvd.nist.gov/vuln/detail/CVE-2026-4519)
+- Upgraded `python3` to mitigate [CVE-2026-4519](https://nvd.nist.gov/vuln/detail/CVE-2026-4519)
+- Upgraded `python3-libs` to mitigate [CVE-2026-4519](https://nvd.nist.gov/vuln/detail/CVE-2026-4519)
+
+## [1.2.5] - 2026-04-10
+
+### Security
+
+- Upgraded `vite` to mitigate:
+  - [CVE-2026-39364](https://nvd.nist.gov/vuln/detail/CVE-2026-39364)
+  - [CVE-2026-39363](https://nvd.nist.gov/vuln/detail/CVE-2026-39363)
+  - [CVE-2026-39365](https://nvd.nist.gov/vuln/detail/CVE-2026-39365)
+- Updated amazonlinux base image digest
+
+## [1.2.4] - 2026-04-02
+
+### Security
+
+- Upgraded `aws-nuke` to mitigate:
+  - [CVE-2026-25679](https://nvd.nist.gov/vuln/detail/CVE-2026-25679)
+  - [CVE-2026-27137](https://nvd.nist.gov/vuln/detail/CVE-2026-27137)
+- Upgraded `path-to-regexp` to mitigate:
+  - [CVE-2026-4867](https://nvd.nist.gov/vuln/detail/CVE-2026-4867)
+  - [CVE-2026-4926](https://nvd.nist.gov/vuln/detail/CVE-2026-4926)
+- Upgraded `lodash` to mitigate [CVE-2026-4800](https://nvd.nist.gov/vuln/detail/CVE-2026-4800)
+
+## [1.2.3] - 2026-03-26
+
+### Security
+
+- Upgraded `flatted` to mitigate [CVE-2026-33228](https://nvd.nist.gov/vuln/detail/CVE-2026-33228)
+- Upgraded `fast-xml-parser` to mitigate [CVE-2026-33349](https://nvd.nist.gov/vuln/detail/CVE-2026-33349)
+
+## [1.2.2] - 2026-03-19
+
+### Security
+
+- Upgraded `flatted` to mitigate [CVE-2026-32141](https://nvd.nist.gov/vuln/detail/CVE-2026-32141)
+- Updated `fast-xml-parser` to address [CVE-2026-26278](https://github.com/advisories/GHSA-jmr7-xgp7-cmfj)
+
+## [1.2.1] - 2026-03-05
+
+### Security
+
+- Upgraded `aws-nuke` to mitigate [CVE-2025-68121](https://nvd.nist.gov/vuln/detail/CVE-2025-68121)
+- Upgraded `minimatch` to mitigate:
+  - [CVE-2026-27903](https://nvd.nist.gov/vuln/detail/CVE-2026-27903)
+  - [CVE-2026-27904](https://nvd.nist.gov/vuln/detail/CVE-2026-27904)
+- Upgraded `serialize-javascript` to mitigate [GHSA-5c6j-r48x-rmvq](https://github.com/advisories/GHSA-5c6j-r48x-rmvq)
+- Upgraded `fast-xml-parser` to mitigate [CVE-2026-27942](https://nvd.nist.gov/vuln/detail/CVE-2026-27942)
+
+## [1.2.0] - 2026-02-25
+
+### Added
+
+- Blueprint management for registering, configuring, and tracking CloudFormation StackSets as reusable infrastructure templates ([#34](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/34))
+  - Configurable deployment strategies with region targeting, concurrency controls, and failure tolerance
+  - Automated blueprint deployment to sandbox accounts during lease provisioning, orchestrated through AWS Step Functions
+  - `Provisioning` and `ProvisioningFailed` lease statuses to track blueprint deployment progress during lease approval
+  - Deployment history per blueprint with health metrics (successful deployments, deployment history, last deployment time)
+  - Blueprint management UI with registration wizard, detail view, deployment history visualization, and editing for basic details and deployment configuration
+  - Blueprint association on lease templates, allowing administrators to attach or detach blueprints during template creation or update
+- Dedicated detail and edit pages for leases and lease templates covering duration, budget, cost report, and blueprint settings
+- Version update alert in the navigation bar when a newer version of the solution is available ([#45](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/45))
+- AWS WAF logging to Amazon CloudWatch Logs and alarm on blocked requests
+- Validation that the `InnovationSandbox-<namespace>-SandboxAccountRole` role exists in a sandbox account before starting cleanup, reducing unnecessary cleanup attempts
+
+### Fixed
+
+- Sorting on date and status columns in frontend tables by adding dedicated sorting comparators
+- Cross-stack reference issue where updates to the account pool stack were not reflected in the compute stack due to deploy-time resolution
+
+### Changed
+
+- Lease approval workflow now supports two paths: immediate access (no blueprint) or deferred access after blueprint deployment completes
+- Miscellaneous UX improvements to the frontend application
+
+### Security
+
+- Added JWT signature verification at Lambda middleware layer to prevent authentication bypass when API Gateway is bypassed ([#93](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/93))
+- Upgraded `fast-xml-parser` to mitigate:
+  - [CVE-2026-25896](https://nvd.nist.gov/vuln/detail/CVE-2026-25896)
+  - [CVE-2026-26278](https://nvd.nist.gov/vuln/detail/CVE-2026-26278)
+- Upgraded `ajv` to mitigate [CVE-2025-69873](https://nvd.nist.gov/vuln/detail/CVE-2025-69873)
+- Upgraded `qs` to mitigate [CVE-2026-2391](https://nvd.nist.gov/vuln/detail/CVE-2026-2391)
+
+## [1.1.8] - 2026-02-04
+
+### Security
+
+- Upgraded `aws-nuke` to mitigate:
+  - [CVE-2025-61726](https://nvd.nist.gov/vuln/detail/CVE-2025-61726)
+  - [CVE-2025-8732](https://nvd.nist.gov/vuln/detail/CVE-2025-8732)
+  - [CVE-2025-61728](https://nvd.nist.gov/vuln/detail/CVE-2025-61728)
+  - [CVE-2025-61730](https://nvd.nist.gov/vuln/detail/CVE-2025-61730)
+- Upgraded `fast-xml-parser` to mitigate [CVE-2026-25128](https://nvd.nist.gov/vuln/detail/CVE-2026-25128)
+- Upgraded `lodash` to mitigate [CVE-2025-13465](https://nvd.nist.gov/vuln/detail/CVE-2025-13465)
+
 ## [1.1.7] - 2026-01-20
 
 ### Fixed
@@ -85,7 +563,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Lease unfreezing capability allowing users to reinstate frozen leases ([#42](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/42))
 - Cost reporting groups feature for tracking and reporting costs by organizational groups ([#43](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/43))
-- Lease assignment functionality allowing administrators and managers to assign leases to other users([#44](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/44))
+- Lease assignment functionality allowing administrators and managers to assign leases to other users ([#44](https://github.com/aws-solutions/innovation-sandbox-on-aws/issues/44))
 - Prioritization of accounts that have been used less recently when selecting an account to use in a lease
 - Visibility configuration to set lease templates as PUBLIC or PRIVATE - PUBLIC templates are visible to all users, while PRIVATE templates are only accessible to Admin and Manager roles, enabling administrators to create restricted templates for specific use cases
 

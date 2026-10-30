@@ -3,6 +3,8 @@
 
 import { AccountCleanupFailureEvent } from "@amzn/innovation-sandbox-commons/events/account-cleanup-failure-event.js";
 import { AccountDriftDetectedAlert } from "@amzn/innovation-sandbox-commons/events/account-drift-detected-alert.js";
+import { AssignmentCreatedEvent } from "@amzn/innovation-sandbox-commons/events/assignment-created-event.js";
+import { AssignmentRemovedEvent } from "@amzn/innovation-sandbox-commons/events/assignment-removed-event.js";
 import { GroupCostReportGeneratedEvent } from "@amzn/innovation-sandbox-commons/events/group-cost-report-generated-event.js";
 import { GroupCostReportGeneratedFailureEvent } from "@amzn/innovation-sandbox-commons/events/group-cost-report-generated-failure-event.js";
 import { LeaseApprovedEvent } from "@amzn/innovation-sandbox-commons/events/lease-approved-event.js";
@@ -10,6 +12,7 @@ import { LeaseBudgetThresholdBreachedAlert } from "@amzn/innovation-sandbox-comm
 import { LeaseDeniedEvent } from "@amzn/innovation-sandbox-commons/events/lease-denied-event.js";
 import { LeaseDurationThresholdBreachedAlert } from "@amzn/innovation-sandbox-commons/events/lease-duration-threshold-breached-alert.js";
 import { LeaseFrozenEvent } from "@amzn/innovation-sandbox-commons/events/lease-frozen-event.js";
+import { LeaseProvisioningFailedEvent } from "@amzn/innovation-sandbox-commons/events/lease-provisioning-failed-event.js";
 import { LeaseRequestedEvent } from "@amzn/innovation-sandbox-commons/events/lease-requested-event.js";
 import { LeaseTerminatedEvent } from "@amzn/innovation-sandbox-commons/events/lease-terminated-event.js";
 import { LeaseUnfrozenEvent } from "@amzn/innovation-sandbox-commons/events/lease-unfrozen-event.js";
@@ -28,10 +31,11 @@ import {
   EmailDestination,
   EmailTemplates,
 } from "@amzn/innovation-sandbox-commons/isb-services/notification/email-templates.js";
-import { AppInsightsLogPatterns } from "@amzn/innovation-sandbox-commons/observability/logging.js";
+import { LogPatterns } from "@amzn/innovation-sandbox-commons/observability/logging.js";
 import { IsbClients } from "@amzn/innovation-sandbox-commons/sdk-clients/index.js";
 import { assertNever } from "@amzn/innovation-sandbox-commons/types/type-guards.js";
 import { fromTemporaryIsbIdcCredentials } from "@amzn/innovation-sandbox-commons/utils/cross-account-roles.js";
+import { isSyntheticM2mEmail } from "@amzn/innovation-sandbox-shared/utils/auth-utils.js";
 import { Logger } from "@aws-lambda-powertools/logger";
 import {
   SendEmailCommand,
@@ -229,6 +233,71 @@ export class EmailService {
       case "LeaseFrozen":
         await this.sendFrozenEmails(LeaseFrozenEvent.parse(isbAlert));
         break;
+      case "LeaseProvisioningFailed":
+        const leaseProvisioningFailedEvent =
+          LeaseProvisioningFailedEvent.parse(isbAlert);
+        const provisioningFailedContext = {
+          webAppUrl: this.webAppUrl,
+          destination: {
+            bcc: await union(
+              await allAdmins(this.idcService),
+              await allManagers(this.idcService),
+            ),
+          },
+        };
+        await this.sendEmail(
+          EmailTemplates.LeaseProvisioningFailed(
+            leaseProvisioningFailedEvent,
+            provisioningFailedContext,
+          ),
+        );
+        break;
+      case "AssignmentCreated":
+        const assignmentCreatedEvent = AssignmentCreatedEvent.parse(isbAlert);
+        const assignmentCreatedRecipients = [
+          ...new Set([
+            assignmentCreatedEvent.Detail.leaseOwner,
+            ...(assignmentCreatedEvent.Detail.assigneeEmail
+              ? [assignmentCreatedEvent.Detail.assigneeEmail]
+              : []),
+          ]),
+        ];
+        const assignmentCreatedContext = {
+          webAppUrl: this.webAppUrl,
+          destination: {
+            to: assignmentCreatedRecipients,
+          },
+        };
+        await this.sendEmail(
+          EmailTemplates.AssignmentCreated(
+            assignmentCreatedEvent,
+            assignmentCreatedContext,
+          ),
+        );
+        break;
+      case "AssignmentRemoved":
+        const assignmentRemovedEvent = AssignmentRemovedEvent.parse(isbAlert);
+        const assignmentRemovedRecipients = [
+          ...new Set([
+            assignmentRemovedEvent.Detail.leaseOwner,
+            ...(assignmentRemovedEvent.Detail.assigneeEmail
+              ? [assignmentRemovedEvent.Detail.assigneeEmail]
+              : []),
+          ]),
+        ];
+        const assignmentRemovedContext = {
+          webAppUrl: this.webAppUrl,
+          destination: {
+            to: assignmentRemovedRecipients,
+          },
+        };
+        await this.sendEmail(
+          EmailTemplates.AssignmentRemoved(
+            assignmentRemovedEvent,
+            assignmentRemovedContext,
+          ),
+        );
+        break;
       default:
         assertNever(emailEventName);
     }
@@ -314,7 +383,7 @@ export class EmailService {
     };
 
     switch (eventType) {
-      case "BudgetExceeded":
+      case "BudgetExceeded": {
         await this.sendEmail(
           EmailTemplates.LeaseTerminated.byBudgetUser(
             parsedEvent as LeaseTerminatedEvent<"BudgetExceeded">,
@@ -328,7 +397,8 @@ export class EmailService {
           ),
         );
         break;
-      case "Expired":
+      }
+      case "Expired": {
         await this.sendEmail(
           EmailTemplates.LeaseTerminated.byDurationUser(
             parsedEvent as LeaseTerminatedEvent<"Expired">,
@@ -342,7 +412,8 @@ export class EmailService {
           ),
         );
         break;
-      case "ManuallyTerminated":
+      }
+      case "ManuallyTerminated": {
         await this.sendEmail(
           EmailTemplates.LeaseTerminated.byManuallyTerminatedUser(
             parsedEvent as LeaseTerminatedEvent<"ManuallyTerminated">,
@@ -350,7 +421,13 @@ export class EmailService {
           ),
         );
         break;
-      case "AccountQuarantined":
+      }
+      case "UserTerminated": {
+        // User self-termination does not send an email - user initiated the
+        // action and the UI already shows a success toast.
+        break;
+      }
+      case "AccountQuarantined": {
         await this.sendEmail(
           EmailTemplates.LeaseTerminated.byAccountQuarantinedUser(
             parsedEvent as LeaseTerminatedEvent<"AccountQuarantined">,
@@ -358,7 +435,8 @@ export class EmailService {
           ),
         );
         break;
-      case "Ejected":
+      }
+      case "Ejected": {
         await this.sendEmail(
           EmailTemplates.LeaseTerminated.byEjectedUser(
             parsedEvent as LeaseTerminatedEvent<"Ejected">,
@@ -366,12 +444,43 @@ export class EmailService {
           ),
         );
         break;
+      }
+      case "ProvisioningFailed": {
+        await this.sendEmail(
+          EmailTemplates.LeaseTerminated.byProvisioningFailedUser(
+            parsedEvent as LeaseTerminatedEvent<"ProvisioningFailed">,
+            userEmailContext,
+          ),
+        );
+        await this.sendEmail(
+          EmailTemplates.LeaseTerminated.byProvisioningFailedAdminManager(
+            parsedEvent as LeaseTerminatedEvent<"ProvisioningFailed">,
+            adminManagerEmailContext,
+          ),
+        );
+        break;
+      }
       default:
         assertNever(eventType);
     }
   }
 
   async sendEmail(email: SynthesizedEmail) {
+    // Drop M2M synthetic recipients (@automation.local) from direct-to-assignee
+    // sends — they can't receive mail and would hard-bounce, hurting SES sender
+    // reputation. The entry guard should keep them out of lease events anyway;
+    // this is defense in depth. The admin/manager bcc path is untouched.
+    if (email.to !== undefined) {
+      const to = email.to.filter((address) => !isSyntheticM2mEmail(address));
+      if (to.length === 0) {
+        this.logger.warn(
+          "Skipping email send: all to: recipients are M2M synthetic addresses. The entry guard should prevent M2M-assignee leases, so this signals legacy data or a bypass path.",
+        );
+        return;
+      }
+      email = { ...email, to };
+    }
+
     try {
       await this.batchSendEmail(email);
     } catch (error) {
@@ -386,7 +495,7 @@ export class EmailService {
     const allRecipients = [...(email.to ?? []), ...(email.bcc ?? [])];
     if (allRecipients.length === 1) {
       this.logger.error(
-        `${AppInsightsLogPatterns.EmailSendingError.pattern} to ${allRecipients[0]}`,
+        `${LogPatterns.EmailSendingError.pattern} to ${allRecipients[0]}`,
         error,
       );
     } else {
@@ -400,13 +509,11 @@ export class EmailService {
   ) {
     if (error instanceof SESServiceException) {
       switch (error.name) {
+        case "AccessDenied":
         case "AccountSendingPausedException":
         case "ConfigurationSetDoesNotExistException":
         case "ConfigurationSetSendingPausedException":
-          this.logger.error(
-            AppInsightsLogPatterns.EmailSendingError.pattern,
-            error,
-          );
+          this.logger.error(LogPatterns.EmailSendingError.pattern, error);
           throw error;
         case "InvalidParameterValueException":
         default:

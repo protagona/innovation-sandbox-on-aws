@@ -26,21 +26,40 @@ export class SharedJsonParamResolver extends Construct {
   public readonly idcSupportedSchemas: string;
   //AccountPool
   public readonly sandboxOuId: string;
+  public readonly availableOuId: string;
+  public readonly activeOuId: string;
+  public readonly frozenOuId: string;
+  public readonly cleanupOuId: string;
+  public readonly quarantineOuId: string;
+  public readonly entryOuId: string;
+  public readonly exitOuId: string;
   public readonly accountPoolSolutionVersion: string;
   public readonly accountPoolSupportedSchemas: string;
-  public readonly isbManagedRegions: string;
+  public readonly isbManagedRegions: string; // JSON string, parsed at runtime
   //Data
   public readonly configApplicationId: string;
   public readonly configEnvironmentId: string;
-  public readonly globalConfigConfigurationProfileId: string;
+  public readonly configTableName: string;
   public readonly nukeConfigConfigurationProfileId: string;
-  public readonly reportingConfigConfigurationProfileId: string;
+  public readonly validatorExclusionConfigConfigurationProfileId: string;
   public readonly accountTable: string;
   public readonly leaseTemplateTable: string;
   public readonly leaseTable: string;
+  public readonly blueprintTable: string;
+  public readonly principalTable: string;
+  public readonly cleanupReportTable: string;
   public readonly tableKmsKeyId: string;
   public readonly dataSolutionVersion: string;
   public readonly dataSupportedSchemas: string;
+  public readonly cognitoUserPoolId: string;
+  public readonly cognitoUserPoolArn: string;
+  public readonly cognitoAppClientId: string;
+  public readonly cognitoIdentityPoolId: string;
+  public readonly cognitoDomain: string;
+  public readonly awsAccessPortalUrl: string;
+  public readonly identityPoolAdminRoleName: string;
+  public readonly identityPoolManagerRoleName: string;
+  public readonly identityPoolUserRoleName: string;
 
   constructor(
     scope: Construct,
@@ -120,6 +139,18 @@ export class SharedJsonParamResolver extends Construct {
     //AccountPool
     this.sandboxOuId =
       sharedJsonParamCR.customResource.getAttString("sandboxOuId");
+    this.availableOuId =
+      sharedJsonParamCR.customResource.getAttString("availableOuId");
+    this.activeOuId =
+      sharedJsonParamCR.customResource.getAttString("activeOuId");
+    this.frozenOuId =
+      sharedJsonParamCR.customResource.getAttString("frozenOuId");
+    this.cleanupOuId =
+      sharedJsonParamCR.customResource.getAttString("cleanupOuId");
+    this.quarantineOuId =
+      sharedJsonParamCR.customResource.getAttString("quarantineOuId");
+    this.entryOuId = sharedJsonParamCR.customResource.getAttString("entryOuId");
+    this.exitOuId = sharedJsonParamCR.customResource.getAttString("exitOuId");
     this.accountPoolSolutionVersion =
       sharedJsonParamCR.customResource.getAttString(
         "accountPoolSolutionVersion",
@@ -137,17 +168,15 @@ export class SharedJsonParamResolver extends Construct {
     this.configEnvironmentId = sharedJsonParamCR.customResource.getAttString(
       "configEnvironmentId",
     );
-    this.globalConfigConfigurationProfileId =
-      sharedJsonParamCR.customResource.getAttString(
-        "globalConfigConfigurationProfileId",
-      );
+    this.configTableName =
+      sharedJsonParamCR.customResource.getAttString("configTableName");
     this.nukeConfigConfigurationProfileId =
       sharedJsonParamCR.customResource.getAttString(
         "nukeConfigConfigurationProfileId",
       );
-    this.reportingConfigConfigurationProfileId =
+    this.validatorExclusionConfigConfigurationProfileId =
       sharedJsonParamCR.customResource.getAttString(
-        "reportingConfigConfigurationProfileId",
+        "validatorExclusionConfigConfigurationProfileId",
       );
     this.accountTable =
       sharedJsonParamCR.customResource.getAttString("accountTable");
@@ -155,6 +184,12 @@ export class SharedJsonParamResolver extends Construct {
       sharedJsonParamCR.customResource.getAttString("leaseTemplateTable");
     this.leaseTable =
       sharedJsonParamCR.customResource.getAttString("leaseTable");
+    this.blueprintTable =
+      sharedJsonParamCR.customResource.getAttString("blueprintTable");
+    this.principalTable =
+      sharedJsonParamCR.customResource.getAttString("principalTable");
+    this.cleanupReportTable =
+      sharedJsonParamCR.customResource.getAttString("cleanupReportTable");
     this.tableKmsKeyId =
       sharedJsonParamCR.customResource.getAttString("tableKmsKeyId");
     this.dataSolutionVersion = sharedJsonParamCR.customResource.getAttString(
@@ -163,5 +198,28 @@ export class SharedJsonParamResolver extends Construct {
     this.dataSupportedSchemas = sharedJsonParamCR.customResource.getAttString(
       "dataSupportedSchemas",
     );
+    this.cognitoUserPoolId =
+      sharedJsonParamCR.customResource.getAttString("cognitoUserPoolId");
+    this.cognitoUserPoolArn =
+      sharedJsonParamCR.customResource.getAttString("cognitoUserPoolArn");
+    this.cognitoAppClientId =
+      sharedJsonParamCR.customResource.getAttString("cognitoAppClientId");
+    this.cognitoIdentityPoolId = sharedJsonParamCR.customResource.getAttString(
+      "cognitoIdentityPoolId",
+    );
+    this.cognitoDomain =
+      sharedJsonParamCR.customResource.getAttString("cognitoDomain");
+    this.awsAccessPortalUrl =
+      sharedJsonParamCR.customResource.getAttString("awsAccessPortalUrl");
+    this.identityPoolAdminRoleName =
+      sharedJsonParamCR.customResource.getAttString(
+        "identityPoolAdminRoleName",
+      );
+    this.identityPoolManagerRoleName =
+      sharedJsonParamCR.customResource.getAttString(
+        "identityPoolManagerRoleName",
+      );
+    this.identityPoolUserRoleName =
+      sharedJsonParamCR.customResource.getAttString("identityPoolUserRoleName");
   }
 }
