@@ -28,6 +28,10 @@
             "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/*AWSReservedSSO_${namespace}_IsbAdmins*",
             "arn:aws:iam::*:role/stacksets-exec-*",
             "arn:aws:iam::*:role/AWSControlTowerExecution",
+            "arn:aws:iam::*:role/AWSReservedSSO_AWSAdministratorAccess_*",
+            "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/*AWSReservedSSO_AWSAdministratorAccess*",
+            "arn:aws:iam::*:role/AWSReservedSSO_${namespace}_IsbUsersPS_*",
+            "arn:aws:iam::*:role/cdk*-exec-role-*",
             "${additionalPrincipalExceptions}"
           ]
         }
@@ -72,6 +76,7 @@
             "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/*AWSReservedSSO_${namespace}_IsbAdmins*",
             "arn:aws:iam::*:role/stacksets-exec-*",
             "arn:aws:iam::*:role/AWSControlTowerExecution",
+            "arn:aws:iam::*:role/cdk*-exec-role-*",
             "${additionalPrincipalExceptions}"
           ]
         }
@@ -137,6 +142,7 @@
             "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/*AWSReservedSSO_${namespace}_IsbAdmins*",
             "arn:aws:iam::*:role/stacksets-exec-*",
             "arn:aws:iam::*:role/AWSControlTowerExecution",
+            "arn:aws:iam::*:role/cdk*-exec-role-*",
             "${additionalPrincipalExceptions}"
           ]
         }

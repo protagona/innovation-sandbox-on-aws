@@ -16,6 +16,7 @@
             "arn:aws:iam::*:role/aws-reserved/sso.amazonaws.com/*AWSReservedSSO_${namespace}_IsbAdmins*",
             "arn:aws:iam::*:role/stacksets-exec-*",
             "arn:aws:iam::*:role/AWSControlTowerExecution",
+            "arn:aws:iam::*:role/cdk*-exec-role-*",
             "${additionalPrincipalExceptions}"
           ]
         }
