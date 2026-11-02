@@ -5,6 +5,7 @@ phases:
   install:
     runtime-versions:
       nodejs: 24
+      java: corretto21
     commands:
       - echo "Installing dependencies..."
       - npm ci
@@ -30,9 +31,15 @@ phases:
         [ -n "$ORG_MGT_ACCOUNT_ID" ] && echo "ORG_MGT_ACCOUNT_ID=$ORG_MGT_ACCOUNT_ID" >> .env
         [ -n "$IDC_ACCOUNT_ID" ] && echo "IDC_ACCOUNT_ID=$IDC_ACCOUNT_ID" >> .env
         [ -n "$ACCEPT_SOLUTION_TERMS_OF_USE" ] && echo "ACCEPT_SOLUTION_TERMS_OF_USE=$ACCEPT_SOLUTION_TERMS_OF_USE" >> .env
+        [ -n "$DEPLOY_REGION" ] && echo "DEPLOY_REGION=$DEPLOY_REGION" >> .env
+        [ -n "$SAML_METADATA_URL" ] && echo "SAML_METADATA_URL=$SAML_METADATA_URL" >> .env
+        [ -n "$AWS_ACCESS_PORTAL_URL" ] && echo "AWS_ACCESS_PORTAL_URL=$AWS_ACCESS_PORTAL_URL" >> .env
 
         # Optional variables
         [ -n "$DEPLOYMENT_MODE" ] && echo "DEPLOYMENT_MODE=$DEPLOYMENT_MODE" >> .env
+        [ -n "$STACK_PREFIX" ] && echo "STACK_PREFIX=$STACK_PREFIX" >> .env
+        [ -n "$CUSTOM_DOMAIN_NAME" ] && echo "CUSTOM_DOMAIN_NAME=$CUSTOM_DOMAIN_NAME" >> .env
+        [ -n "$CUSTOM_DOMAIN_CERTIFICATE_ARN" ] && echo "CUSTOM_DOMAIN_CERTIFICATE_ARN=$CUSTOM_DOMAIN_CERTIFICATE_ARN" >> .env
         [ -n "$ADMIN_GROUP_NAME" ] && echo "ADMIN_GROUP_NAME=$ADMIN_GROUP_NAME" >> .env
         [ -n "$MANAGER_GROUP_NAME" ] && echo "MANAGER_GROUP_NAME=$MANAGER_GROUP_NAME" >> .env
         [ -n "$USER_GROUP_NAME" ] && echo "USER_GROUP_NAME=$USER_GROUP_NAME" >> .env
